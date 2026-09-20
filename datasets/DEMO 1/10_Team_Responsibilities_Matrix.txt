@@ -1,0 +1,70 @@
+CASCADE FREIGHT TECHNOLOGIES (CFT)
+TEAM RESPONSIBILITIES MATRIX
+
+Document ID: TRM-01
+Owner: Sarah Chen, VP Engineering (cross-functional maintenance with Marcus Webb,
+Director of Pricing & Rates)
+Last Updated: 2026-02-12
+Related Documents: SD-TMS-014, COB-001, RDP-002, WF-SB-01, WF-IR-01
+
+1. PLATFORM ENGINEERING
+Lead: Sarah Chen, VP Engineering
+Owns systems: Meridian TMS, CarrierConnect API (API-CC-003)
+Builds (not business-owns): RateEngine (API-RE-007), on behalf of Pricing & Rates
+Responsibilities:
+  - Production uptime and on-call for Meridian TMS, RateEngine, CarrierConnect API
+    (see SD-TMS-014 Section 6, WF-IR-01 Section 6).
+  - Implements FR/NFR requirements from approved BRDs (e.g., BRD-RE2-0091).
+  - Owns Incident Response Workflow (WF-IR-01) execution.
+
+2. PRICING & RATES
+Lead: Marcus Webb, Director of Pricing & Rates
+Owns systems: RateEngine business logic (rate rules, lane table)
+Owns policy: Rate Dispute Resolution Policy (RDP-002)
+Owns SOP: Rate Dispute Resolution SOP (SOP-RDR-02)
+Responsibilities:
+  - Defines and maintains lane pricing in the BillingCore rate ledger.
+  - Resolves held quotes (RATE-409) within 4 business hours (RDP-002 Section 5.1).
+  - Resolves rejected quotes (RATE-422) and lane requests.
+  - Sponsors BRDs affecting RateEngine, e.g., BRD-RE2-0091.
+
+3. CARRIER RELATIONS
+Lead: Priya Nair, Head of Carrier Relations
+Owns policy: Carrier Onboarding Policy (COB-001)
+Owns SOP: Carrier Onboarding SOP (SOP-COB-01)
+Responsibilities:
+  - Reviews and approves carrier documentation (COB-001 Section 3).
+  - Advances carriers through PENDING -> DOCS_REVIEW -> INSURANCE_REVIEW -> ACTIVE
+    status in CarrierConnect API (API-CC-003 Section 4.2).
+  - Manages carrier suspension and reactivation (COB-001 Section 5).
+  - Provides carrier-side context during Incident Response (WF-IR-01 Step 3).
+
+4. BILLING OPERATIONS
+Lead: Aisha Thompson, Billing Operations Manager
+Owns systems: BillingCore
+Responsibilities:
+  - Maintains the rate ledger consumed by RateEngine (API-RE-007).
+  - Generates invoices at Shipment Booking Workflow Step 6 (WF-SB-01).
+  - Issues credit memos following resolved rate disputes (RDP-002 Section 6).
+  - Maintains 7-year financial record retention (SD-TMS-014 Section 5).
+
+5. CUSTOMER SUCCESS
+Lead: Diego Ramirez, Customer Success Lead
+Owns systems: CustomerPortal (business ownership; Platform Engineering builds it)
+Owns support content: Knowledge Base (e.g., KB-0142)
+Responsibilities:
+  - Tier 1/Tier 2 support via Helix ticketing system.
+  - Shipper communication during held/rejected quotes (KB-0142) and incidents
+    (WF-IR-01 Step 5).
+  - Flags ticket-volume anomalies that can trigger SEV-2/SEV-3 escalation.
+
+6. CROSS-TEAM DEPENDENCY SUMMARY
+- Pricing & Rates depends on Platform Engineering to implement RateEngine changes and
+  on Billing Operations for rate ledger accuracy.
+- Platform Engineering depends on Carrier Relations for accurate carrier status data
+  feeding CarrierConnect API.
+- Customer Success depends on Pricing & Rates for timely resolution of held/rejected
+  quotes and on Platform Engineering for system uptime and incident communication.
+- All teams contribute BRD/policy review input; final sign-off on cross-system BRDs
+  (e.g., BRD-RE2-0091) requires both the business sponsor and Sarah Chen as technical
+  sponsor.

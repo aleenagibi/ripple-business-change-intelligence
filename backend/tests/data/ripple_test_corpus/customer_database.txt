@@ -1,0 +1,9 @@
+Customer Database
+
+The Customer Database stores customer account and profile information.
+
+The Order Service uses the Customer Database when creating customer orders.
+
+Customer information is required for order processing.
+
+Access to customer information is restricted to authorized services.

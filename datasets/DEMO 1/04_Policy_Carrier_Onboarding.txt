@@ -1,0 +1,57 @@
+CASCADE FREIGHT TECHNOLOGIES (CFT)
+BUSINESS POLICY
+
+Policy ID: COB-001
+Title: Carrier Onboarding Policy
+Owner: Carrier Relations (Priya Nair, Head of Carrier Relations)
+Approved by: Sarah Chen, VP Engineering; Marcus Webb, Director of Pricing & Rates
+Effective Date: 2025-08-01
+Last Reviewed: 2026-01-10
+Related Systems: CarrierConnect API, Meridian TMS
+Related SOP: Carrier Onboarding SOP (SOP-COB-01)
+
+1. PURPOSE
+This policy defines the requirements a freight carrier must satisfy before being
+granted ACTIVE status in CarrierConnect API (see API-CC-003 section 4.2) and becoming
+eligible for load assignment through Meridian TMS.
+
+2. POLICY STATEMENT
+No carrier may be assigned a shipment or appear in RateEngine's capacity checks
+(API-CC-003 endpoint /v3/carriers/{carrier_id}/capacity) unless their CarrierConnect
+status is ACTIVE. Carriers in PENDING, DOCS_REVIEW, or INSURANCE_REVIEW status will
+return CARR-404 when queried by RateEngine, which causes rate quotes for that carrier
+to fall back to RATE-409 handling per BRD-RE2-0091.
+
+3. REQUIRED DOCUMENTATION
+Before advancing past DOCS_REVIEW, a carrier must submit, via CarrierConnect API
+endpoint GET /v3/carriers/{carrier_id}/documents:
+  a) Valid MC (Motor Carrier) Authority number
+  b) Certificate of Insurance with minimum $1,000,000 auto liability coverage
+  c) Completed W-9
+  d) Signed Carrier Services Agreement
+
+4. INSURANCE REVIEW REQUIREMENTS
+Carrier Relations must verify insurance coverage meets or exceeds policy minimums
+before advancing a carrier from INSURANCE_REVIEW to ACTIVE. Insurance must be
+re-verified every 12 months; failure to re-verify automatically reverts a carrier's
+status to SUSPENDED in CarrierConnect API.
+
+5. SUSPENSION AND REACTIVATION
+A carrier is moved to SUSPENDED status if:
+  - Insurance lapses without re-verification (Section 4), or
+  - The carrier receives 3 or more RATE-409 capacity-check failures in a rolling
+    30-day window due to unresponsive systems (see API-CC-003 CARR-503), or
+  - A rate dispute under RDP-002 is resolved against the carrier for cause.
+Reactivation requires re-submission of documentation per Section 3 and sign-off from
+the Head of Carrier Relations.
+
+6. SERVICE LEVELS
+Carrier Relations commits to processing a complete DOCS_REVIEW submission within 5
+business days, and INSURANCE_REVIEW within 3 business days, per Carrier Onboarding
+SOP (SOP-COB-01).
+
+7. GOVERNANCE
+This policy is reviewed quarterly by Carrier Relations and Platform Engineering to
+ensure alignment with CarrierConnect API's capacity-check requirements introduced in
+RateEngine v2 (BRD-RE2-0091). Any change to onboarding stages must be reflected in
+API-CC-003 section 4.2 status values and in Team Responsibilities Matrix (TRM-01).

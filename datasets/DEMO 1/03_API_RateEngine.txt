@@ -1,0 +1,67 @@
+CASCADE FREIGHT TECHNOLOGIES (CFT)
+API DOCUMENTATION
+
+Document ID: API-RE-007
+Title: RateEngine API — v2
+Owner: Pricing & Rates Team (Marcus Webb, Director), built by Platform Engineering
+Consuming Systems: Meridian TMS, CustomerPortal
+Related Documents: BRD-RE2-0091, API-CC-003, RDP-002, SOP-RDR-02
+
+1. OVERVIEW
+RateEngine API is the pricing service invoked by Meridian TMS during the "Rate
+Confirmation" step of the Shipment Booking Workflow (WF-SB-01), and directly by
+CustomerPortal when a shipper requests an instant quote. As of v2 (see BRD-RE2-0091),
+every bindable quote requires a successful capacity check against CarrierConnect API
+(API-CC-003) before issuance.
+
+2. BASE URL
+https://internal-api.cascadefreight.com/rateengine/v2
+
+3. ENDPOINTS
+
+3.1 POST /v2/quotes
+Request body: origin_zip, destination_zip, weight_lbs, carrier_id (optional),
+requested_pickup_date.
+Behavior:
+  1. Looks up lane pricing from the BillingCore rate ledger.
+  2. Calls CarrierConnect API GET /v3/carriers/{carrier_id}/capacity (API-CC-003).
+  3. If lane data is older than 15 minutes (per RDP-002 section 4.2), the quote is
+     flagged and held rather than returned as bindable.
+  4. On success, emits a rate_quote_issued event consumed by Meridian TMS.
+Response fields: quote_id, rate_amount, currency, expires_at, status.
+status values: BINDABLE, HELD, REJECTED.
+
+3.2 GET /v2/quotes/{quote_id}
+Retrieves a previously issued quote and its current status.
+
+3.3 POST /v2/quotes/{quote_id}/dispute
+Used by Customer Success (via Helix integration) to open a rate dispute. Triggers the
+Rate Dispute Resolution SOP (SOP-RDR-02). Creates a case owned by Pricing & Rates.
+
+4. ERROR CODE REFERENCE
+RATE-409 — Stale rate data or failed carrier capacity check (see API-CC-003 CARR-503).
+           The quote is held, not rejected; Pricing & Rates has 4 business hours to
+           refresh the lane per RDP-002 section 5.1.
+RATE-422 — Invalid lane definition (origin/destination pair not in the active lane
+           table). Auto-creates a Helix ticket assigned to Pricing & Rates per
+           BRD-RE2-0091 FR-3.
+RATE-500 — Internal error. Escalate via Incident Response Workflow (WF-IR-01).
+
+5. RATE LIMITS
+2,000 requests/minute, shared across Meridian TMS and CustomerPortal callers.
+
+6. SLA
+p95 latency: under 2 seconds (BRD-RE2-0091 NFR-1).
+p99 latency: under 4 seconds.
+Availability: 99.9%, reviewed monthly by Platform Engineering and Pricing & Rates.
+
+7. VERSIONING NOTES
+v2 (2026-02, current): Adds CarrierConnect capacity check, RATE-409 semantics change
+from "reject" to "hold". See BRD-RE2-0091 for full requirements.
+v1 (2024-06, deprecated, sunset 2026-06-01): Served cached lane rates with no
+real-time carrier capacity check; the primary source of the Q4 2025 ticket volume
+that motivated the v2 upgrade.
+
+8. RELATED SUPPORT CONTENT
+See Support KB article "Resolving Rate Quote Errors (RATE-409 / RATE-422)" for
+customer-facing guidance and Tier 1/Tier 2 escalation paths.

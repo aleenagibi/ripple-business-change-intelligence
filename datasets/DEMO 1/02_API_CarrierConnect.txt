@@ -1,0 +1,70 @@
+CASCADE FREIGHT TECHNOLOGIES (CFT)
+API DOCUMENTATION
+
+Document ID: API-CC-003
+Title: CarrierConnect API — v3
+Owner: Platform Engineering (Sarah Chen, VP Engineering)
+Consuming Systems: RateEngine, Meridian TMS, CustomerPortal
+Consuming Teams: Pricing & Rates, Carrier Relations
+Status: Generally Available (GA target 2026-03-01; currently in staged rollout)
+SLA: 99.9% uptime, p95 response time < 400ms
+Related Documents: BRD-RE2-0091, SD-TMS-014, Policy COB-001
+
+1. OVERVIEW
+CarrierConnect API is the integration layer between Meridian TMS and CFT's network of
+contracted carriers. It exposes carrier capacity, tracking, and onboarding-status data.
+It is maintained by Platform Engineering and is the single source of truth that
+RateEngine v2 (see BRD-RE2-0091) queries before issuing a bindable rate quote.
+
+2. AUTHENTICATION
+All requests require an OAuth2 bearer token issued by CFT's internal Auth Gateway.
+Tokens are scoped per calling system (e.g., "rateengine.read", "tms.write"). Failure to
+present a valid token returns error code CARR-401.
+
+3. BASE URL
+https://internal-api.cascadefreight.com/carrierconnect/v3
+
+4. ENDPOINTS
+
+4.1 GET /v3/carriers/{carrier_id}/capacity
+Returns real-time available capacity for a given carrier on a given lane.
+Consumed by: RateEngine v2 (FR-1, BRD-RE2-0091).
+Response fields: carrier_id, lane_code, available_trucks, capacity_updated_at.
+Errors:
+  CARR-503 — Carrier system timeout (upstream carrier API did not respond within 3s).
+  CARR-401 — Invalid or expired auth token.
+  CARR-404 — Carrier not found or not yet onboarded (see Policy COB-001).
+
+4.2 GET /v3/carriers/{carrier_id}/status
+Returns onboarding status: PENDING, DOCS_REVIEW, INSURANCE_REVIEW, ACTIVE, SUSPENDED.
+Statuses correspond directly to the stages defined in Carrier Onboarding SOP
+(SOP-COB-01). Consumed by Carrier Relations tooling and Meridian TMS's carrier
+directory view.
+
+4.3 POST /v3/carriers/{carrier_id}/tracking-events
+Accepts shipment tracking pings from carriers. Consumed by Meridian TMS to update
+shipment status during the "In Transit" step of Shipment Booking Workflow (WF-SB-01).
+
+4.4 GET /v3/carriers/{carrier_id}/documents
+Returns onboarding document metadata (insurance certificate, W-9, MC authority).
+Used by Carrier Relations during the DOCS_REVIEW stage per SOP-COB-01 Step 3.
+
+5. ERROR CODE REFERENCE
+CARR-401: Authentication failure. Caller must refresh token via Auth Gateway.
+CARR-404: Carrier not found. Common when a carrier is still in PENDING status.
+CARR-503: Upstream carrier system timeout. RateEngine v2 treats this as a hard
+          failure and returns RATE-409 to the shipper-facing caller rather than
+          serving a stale quote (see BRD-RE2-0091 FR-2, and RDP-002).
+
+6. RATE LIMITS
+1,000 requests/minute per calling system. RateEngine v2's projected peak load is
+620 requests/minute based on Q4 2025 booking volume (see SD-TMS-014).
+
+7. CHANGE LOG
+v3.0 (2026-01-15): Added /capacity endpoint for RateEngine v2 integration.
+v2.4 (2025-09-02): Deprecated /v2/carriers/{carrier_id}/rates (moved to RateEngine).
+v2.0 (2024-11-20): Initial GA release, owned by Platform Engineering.
+
+8. SUPPORT
+Internal integration issues: file a Helix ticket tagged "platform-engineering".
+Carrier-side onboarding issues: route to Carrier Relations per Policy COB-001.

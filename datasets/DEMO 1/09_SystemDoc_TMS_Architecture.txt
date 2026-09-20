@@ -1,0 +1,64 @@
+CASCADE FREIGHT TECHNOLOGIES (CFT)
+SYSTEM DOCUMENTATION
+
+Document ID: SD-TMS-014
+Title: Meridian TMS — System Architecture and Operations
+Owner: Platform Engineering (Sarah Chen, VP Engineering)
+Last Updated: 2026-02-05
+Related Documents: BRD-RE2-0091, API-CC-003, API-RE-007, WF-SB-01, WF-IR-01
+
+1. SYSTEM OVERVIEW
+Meridian TMS is CFT's core Transportation Management System. It orchestrates the
+Shipment Booking Workflow (WF-SB-01), coordinating three downstream services:
+  - RateEngine (pricing) — see API-RE-007
+  - CarrierConnect API (carrier network integration) — see API-CC-003
+  - BillingCore (invoicing) — internal system, owned by Billing Operations
+Meridian TMS itself is owned and operated by Platform Engineering.
+
+2. COMPONENT MAP
+- CustomerPortal (customer-facing web app, owned by Customer Success) — calls
+  RateEngine API directly for quotes and reads shipment status from Meridian TMS.
+- Meridian TMS (core orchestration, owned by Platform Engineering) — calls RateEngine
+  API and CarrierConnect API; notifies BillingCore on delivery.
+- RateEngine (pricing service, owned by Pricing & Rates, built by Platform
+  Engineering) — reads BillingCore's rate ledger, calls CarrierConnect API for
+  capacity checks (per BRD-RE2-0091).
+- CarrierConnect API (carrier integration layer, owned by Platform Engineering) —
+  interfaces with external carrier systems; exposes capacity, status, tracking, and
+  document endpoints.
+- BillingCore (invoicing and rate ledger, owned by Billing Operations) — source of
+  truth for lane pricing and invoice generation.
+
+3. DATA FLOW (Shipment Booking Workflow reference)
+CustomerPortal -> RateEngine API (POST /v2/quotes) -> BillingCore (rate ledger read)
++ CarrierConnect API (GET /v3/carriers/{id}/capacity) -> Meridian TMS (carrier
+assignment) -> CarrierConnect API (tracking events) -> BillingCore (invoice trigger).
+Full step sequence is documented in WF-SB-01.
+
+4. MONITORING AND SLA
+Monitored metrics and thresholds (feed the alerting described in Incident Response
+Workflow WF-IR-01):
+  - RateEngine p95 latency: alert if > 2s (warning) / > 4s (SEV-2 trigger).
+  - CarrierConnect API error rate: alert if > 5% over 10 minutes (SEV-2 trigger).
+  - Meridian TMS booking success rate: alert if < 98% over 15 minutes (SEV-1
+    trigger).
+  - Helix ticket volume for RATE-409/RATE-422: alert if 3x baseline in 1 hour.
+
+5. DATA RETENTION (Appendix B reference in BRD-RE2-0091)
+- Rate ledger read logs: retained 2 years.
+- Financial/invoice records (BillingCore): retained 7 years per Data Retention
+  Policy (maintained separately by Billing Operations and Legal).
+- Carrier onboarding documents (per Policy COB-001): retained for the life of the
+  carrier relationship plus 3 years.
+
+6. DEPLOYMENT AND OWNERSHIP
+Meridian TMS, RateEngine, and CarrierConnect API are deployed and on-call-supported
+by Platform Engineering. Pricing & Rates owns rate logic configuration within
+RateEngine but does not have production deploy access. Carrier Relations owns
+onboarding business rules enforced by CarrierConnect API but not the API's code.
+
+7. KNOWN LIMITATIONS
+- RateEngine v1 (pre-BRD-RE2-0091) did not perform real-time carrier capacity checks;
+  fully decommissioned 2026-06-01 per API-RE-007 versioning notes.
+- CarrierConnect API v3 capacity endpoint is in staged rollout; full GA targeted
+  2026-03-01 (see API-CC-003).

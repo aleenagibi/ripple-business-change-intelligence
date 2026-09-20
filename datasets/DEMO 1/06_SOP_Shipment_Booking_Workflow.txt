@@ -1,0 +1,67 @@
+CASCADE FREIGHT TECHNOLOGIES (CFT)
+STANDARD OPERATING PROCEDURE / WORKFLOW
+
+Workflow ID: WF-SB-01
+Title: Shipment Booking Workflow
+Owner: Platform Engineering (system), Customer Success (process)
+Systems Involved: Meridian TMS, RateEngine, CarrierConnect API, CustomerPortal,
+BillingCore
+Related Documents: BRD-RE2-0091, API-RE-007, API-CC-003
+
+1. PURPOSE
+Describes the end-to-end steps Meridian TMS executes when a shipper books a freight
+shipment, from initial quote request through carrier assignment and invoicing
+handoff.
+
+2. WORKFLOW STEPS
+
+Step 1 — Quote Request
+Trigger: Shipper submits origin, destination, weight, and pickup date via
+CustomerPortal.
+System action: CustomerPortal calls RateEngine API (API-RE-007) POST /v2/quotes.
+
+Step 2 — Rate Confirmation
+System action: RateEngine looks up lane pricing in the BillingCore rate ledger and
+calls CarrierConnect API (API-CC-003) GET /v3/carriers/{carrier_id}/capacity.
+Decision:
+  - If status BINDABLE: proceed to Step 3.
+  - If status HELD (RATE-409): route to Pricing & Rates queue per Rate Dispute
+    Resolution SOP (SOP-RDR-02); shipper sees "pricing being confirmed" in
+    CustomerPortal.
+  - If status REJECTED (RATE-422): auto-create Helix ticket per BRD-RE2-0091 FR-3;
+    shipper is prompted to re-enter lane details.
+
+Step 3 — Carrier Assignment
+System action: Meridian TMS assigns the shipment to the carrier returned by the
+bindable quote, provided that carrier's CarrierConnect status is ACTIVE per Carrier
+Onboarding Policy (COB-001). If the carrier has since gone SUSPENDED, Meridian TMS
+re-runs Step 2 against the next available carrier.
+
+Step 4 — Booking Confirmation
+System action: Meridian TMS emits a shipment_booked event. CustomerPortal displays
+confirmation to the shipper, including quote_id from API-RE-007.
+
+Step 5 — In Transit
+System action: Carrier sends tracking pings via CarrierConnect API (API-CC-003)
+POST /v3/carriers/{carrier_id}/tracking-events. Meridian TMS updates shipment status
+visible in CustomerPortal.
+
+Step 6 — Delivery and Billing Handoff
+System action: On delivery confirmation, Meridian TMS notifies BillingCore to
+generate an invoice against the bound rate_amount from Step 2.
+
+3. EXCEPTION HANDLING
+Any unhandled system error at Steps 2, 3, or 6 (e.g., RATE-500, CARR-503 persisting
+beyond retry limits) triggers Incident Response Workflow (WF-IR-01).
+
+4. OWNERSHIP AND ESCALATION
+- Steps 1, 2, 4, 5: owned by Platform Engineering (system uptime), Pricing & Rates
+  (rate logic).
+- Step 3: owned by Carrier Relations (carrier eligibility).
+- Step 6: owned by Billing Operations.
+- Process-level escalations (shipper complaints): Customer Success, via Helix.
+
+5. REVISION HISTORY
+v1.3 (2026-02-11): Updated Step 2 decision branches to reflect RateEngine v2's HELD
+status introduced in BRD-RE2-0091.
+v1.0 (2025-06-01): Initial workflow documented.

@@ -1,0 +1,57 @@
+CASCADE FREIGHT TECHNOLOGIES (CFT)
+CUSTOMER SUPPORT KNOWLEDGE BASE ARTICLE
+
+Article ID: KB-0142
+Title: Resolving Rate Quote Errors (RATE-409 / RATE-422)
+Owner: Customer Success (Diego Ramirez, Customer Success Lead)
+Audience: Tier 1 and Tier 2 Support Agents
+Last Updated: 2026-02-14
+Related Documents: API-RE-007, RDP-002, BRD-RE2-0091, WF-SB-01
+
+SUMMARY
+This article helps support agents triage shipper-reported rate quote failures in
+CustomerPortal during Step 2 (Rate Confirmation) of the Shipment Booking Workflow
+(WF-SB-01). Since the RateEngine v2 rollout (BRD-RE2-0091), quote failures fall into
+two categories: held quotes (RATE-409) and rejected quotes (RATE-422).
+
+SYMPTOM: Shipper sees "Pricing being confirmed" and the quote does not bind.
+CAUSE: RateEngine returned status HELD with error code RATE-409. This happens when:
+  - The lane pricing data used was older than the 15-minute freshness standard in
+    Rate Dispute Resolution Policy (RDP-002), or
+  - CarrierConnect API (API-CC-003) returned a timeout (CARR-503) or auth failure
+    (CARR-401) during the required carrier capacity check.
+TIER 1 ACTION: Inform the shipper that pricing is being confirmed and may take up to
+4 business hours per RDP-002 Section 5.1. Do not manually override the hold. A Helix
+ticket is auto-created and assigned to Pricing & Rates (BRD-RE2-0091 FR-3); do not
+duplicate it.
+ESCALATE TO TIER 2 IF: The hold exceeds 4 business hours without resolution, or the
+shipper reports this on 3+ separate bookings in a week (possible SEV-3 pattern per
+Incident Response Workflow WF-IR-01).
+
+SYMPTOM: Shipper's quote request fails immediately with an error message.
+CAUSE: RateEngine returned status REJECTED with error code RATE-422 — the
+origin/destination pair is not in the active lane table.
+TIER 1 ACTION: Confirm the shipper entered valid ZIP codes. If correct, this is
+likely a genuinely unserved lane; direct the shipper to submit a lane request via
+CustomerPortal. A Helix ticket is auto-created for Pricing & Rates per
+BRD-RE2-0091 FR-3 — link the existing ticket rather than opening a new one.
+ESCALATE TO TIER 2 IF: The lane was previously served and stopped working — this may
+indicate a lane table regression and should be flagged to Platform Engineering.
+
+SYMPTOM: Shipper disputes the price they were quoted or ultimately billed.
+CAUSE: This is not a system error but a rate dispute.
+TIER 1 ACTION: Do not attempt to resolve pricing disputes directly. Direct the
+shipper to submit a dispute via CustomerPortal (which calls API-RE-007 POST
+/v2/quotes/{quote_id}/dispute) or open a Helix ticket tagged "rate-dispute" for
+Pricing & Rates, per Rate Dispute Resolution SOP (SOP-RDR-02).
+
+RELATED CARRIER-SIDE ISSUE
+If the shipper's preferred carrier is unavailable, check whether that carrier is
+ACTIVE in CarrierConnect API. A SUSPENDED or PENDING carrier (see Carrier Onboarding
+Policy COB-001) will not appear in capacity checks and will not be offered as an
+option regardless of pricing.
+
+DO NOT
+- Do not manually mark a HELD quote as BINDABLE.
+- Do not close the auto-created Helix ticket; Pricing & Rates owns closure.
+- Do not quote a rate verbally that has not been confirmed BINDABLE in the system.

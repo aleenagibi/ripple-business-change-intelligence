@@ -1,0 +1,11 @@
+Payments Team Responsibilities
+
+The Payments Team maintains the Payment API.
+
+The Payments Team maintains the Payment Gateway.
+
+The Payments Team handles payment processing issues.
+
+The Payments Team handles refund processing issues.
+
+The Payments Team works with support teams when payment failures affect customers.

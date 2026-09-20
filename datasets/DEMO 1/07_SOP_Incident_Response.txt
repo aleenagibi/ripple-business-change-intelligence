@@ -1,0 +1,60 @@
+CASCADE FREIGHT TECHNOLOGIES (CFT)
+STANDARD OPERATING PROCEDURE / WORKFLOW
+
+Workflow ID: WF-IR-01
+Title: Incident Response Workflow
+Owner: Platform Engineering (Sarah Chen, VP Engineering)
+Systems Involved: Meridian TMS, RateEngine, CarrierConnect API, BillingCore,
+CustomerPortal
+Related Documents: SD-TMS-014, API-RE-007, API-CC-003, WF-SB-01
+
+1. PURPOSE
+Defines how CFT detects, triages, and resolves production incidents affecting any
+system in the Meridian TMS ecosystem, and how those incidents are communicated to
+affected teams.
+
+2. SEVERITY LEVELS
+SEV-1: Full outage of Meridian TMS, RateEngine, or CarrierConnect API; shipments
+       cannot be booked. Target time to mitigation: 30 minutes.
+SEV-2: Degraded performance (e.g., RateEngine p95 latency exceeds 4 seconds per
+       API-RE-007 SLA, or CarrierConnect API error rate exceeds 5%). Target time to
+       mitigation: 2 hours.
+SEV-3: Isolated errors (e.g., elevated RATE-422 or CARR-404 rates for a single lane
+       or carrier) not affecting overall availability. Target time to mitigation: 1
+       business day.
+
+3. DETECTION
+Incidents are detected via:
+  - Automated alerting on the SLA thresholds defined in System Documentation
+    SD-TMS-014 (Section 4, Monitoring).
+  - Error-rate spikes on RATE-500, CARR-503, or CARR-401 codes.
+  - Helix ticket volume spikes flagged by Customer Success (3x baseline in 1 hour
+    triggers automatic escalation to Platform Engineering).
+
+4. RESPONSE PROCEDURE
+Step 1: On-call Platform Engineer acknowledges the alert within 5 minutes (SEV-1) or
+        15 minutes (SEV-2).
+Step 2: Incident channel opened; Sarah Chen is paged for SEV-1 incidents affecting
+        Meridian TMS or RateEngine.
+Step 3: If root cause is traced to CarrierConnect API (API-CC-003), Platform
+        Engineering coordinates with Carrier Relations to determine whether affected
+        carriers should be flagged per Carrier Onboarding Policy (COB-001) Section 5.
+Step 4: If root cause is traced to stale or incorrect lane pricing, Pricing & Rates is
+        looped in per Rate Dispute Resolution Policy (RDP-002) Section 4.
+Step 5: Customer Success is notified for any SEV-1/SEV-2 incident to prepare shipper
+        communications and pause new Helix ticket auto-creation for the affected
+        error codes to avoid duplicate tickets.
+
+5. POST-INCIDENT
+A post-incident review is required within 3 business days for any SEV-1 or SEV-2
+incident, owned by the team identified as root-cause owner in Step 3 or 4. Findings
+that require a policy or SOP change (e.g., adjusting the RATE-409 hold window in
+RDP-002) are routed to the relevant policy owner for revision.
+
+6. ESCALATION CONTACTS
+- Platform Engineering (Meridian TMS, RateEngine infra, CarrierConnect API): Sarah
+  Chen.
+- Pricing & Rates (rate logic, lane data): Marcus Webb.
+- Carrier Relations (carrier-side failures): Priya Nair.
+- Billing Operations (BillingCore, invoicing impact): Aisha Thompson.
+- Customer Success (shipper communication, Helix): Diego Ramirez.

@@ -1,0 +1,57 @@
+CASCADE FREIGHT TECHNOLOGIES (CFT)
+BUSINESS POLICY
+
+Policy ID: RDP-002
+Title: Rate Dispute Resolution Policy
+Owner: Pricing & Rates Team (Marcus Webb, Director)
+Approved by: Sarah Chen, VP Engineering; Diego Ramirez, Customer Success Lead
+Effective Date: 2025-11-01
+Last Reviewed: 2026-02-11 (revised alongside BRD-RE2-0091)
+Related Systems: RateEngine, BillingCore
+Related SOP: Rate Dispute Resolution SOP (SOP-RDR-02)
+Related API: API-RE-007 (POST /v2/quotes/{quote_id}/dispute)
+
+1. PURPOSE
+Defines how CFT identifies, holds, and resolves shipper or carrier disputes over a
+quoted or invoiced freight rate, and sets the freshness standard RateEngine must meet
+before issuing a bindable quote.
+
+2. RATE FRESHNESS STANDARD
+Lane pricing data used to generate a quote must not be older than 15 minutes at the
+time of issuance. RateEngine v2 enforces this automatically (BRD-RE2-0091 FR-5); any
+quote built on data older than this threshold must be returned with status HELD and
+error code RATE-409, never issued as BINDABLE.
+
+3. DISPUTE INTAKE
+Disputes may be raised by:
+  a) A shipper, via CustomerPortal, which calls API-RE-007 POST
+     /v2/quotes/{quote_id}/dispute.
+  b) A carrier, via a Helix ticket routed to Carrier Relations, escalated to Pricing
+     & Rates if the dispute concerns lane pricing rather than onboarding status.
+Every dispute opens a case owned by Pricing & Rates and is worked per SOP-RDR-02.
+
+4. HOLD CONDITIONS
+A quote must be placed on hold (status HELD, RATE-409) rather than rejected outright
+when:
+  4.1 Lane pricing data exceeds the 15-minute freshness standard (Section 2).
+  4.2 CarrierConnect API returns CARR-503 or CARR-401 during the required capacity
+      check (see API-CC-003, BRD-RE2-0091 FR-2).
+Held quotes must be resolved by Pricing & Rates within 4 business hours (Section 5.1).
+
+5. RESOLUTION TIMELINES
+5.1 Held quotes (RATE-409): 4 business hours to refresh pricing and re-issue or
+    reject.
+5.2 Formal disputes opened via Section 3: 2 business days for initial response, 5
+    business days to final resolution.
+5.3 Disputes resulting in a carrier-caused finding may trigger carrier suspension
+    under Carrier Onboarding Policy (COB-001) Section 5.
+
+6. FINANCIAL ADJUSTMENTS
+Any rate correction resulting from a resolved dispute is written back to the
+BillingCore rate ledger and, if an invoice has already been issued, triggers a credit
+memo per Billing Operations' internal procedures (outside the scope of this policy).
+
+7. REPORTING
+Pricing & Rates reports monthly dispute volume and RATE-409 hold rates to Sarah Chen
+(VP Engineering) and Marcus Webb (Director of Pricing & Rates) as part of the
+RateEngine v2 success metrics defined in BRD-RE2-0091 Section 2.

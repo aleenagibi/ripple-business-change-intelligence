@@ -1,0 +1,9 @@
+Order Service
+
+The Order Service creates customer orders after successful payment confirmation.
+
+The Checkout Workflow sends confirmed orders to the Order Service.
+
+The Order Service uses the Customer Database to retrieve customer information.
+
+Payment confirmation is required before an order can be created.
