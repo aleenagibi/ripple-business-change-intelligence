@@ -1,0 +1,11 @@
+Checkout Workflow
+
+The Checkout Workflow collects customer and order information.
+
+During checkout, the workflow sends payment requests to the Payment API.
+
+The Checkout Workflow depends on successful payment processing.
+
+After successful payment confirmation, the Checkout Workflow sends the order to the Order Service.
+
+Payment failures cause the Checkout Workflow to display an error and allow the customer to retry.

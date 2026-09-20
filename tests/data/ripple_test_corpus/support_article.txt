@@ -1,0 +1,11 @@
+Payment Support Guide
+
+Customers may experience payment failures during checkout.
+
+Support teams should verify payment status before asking customers to retry a transaction.
+
+Payment Gateway failures may cause checkout payment failures.
+
+For unresolved payment issues, support staff should escalate the issue to the Payments Team.
+
+Refund-related customer issues should be checked against the Refund Policy.

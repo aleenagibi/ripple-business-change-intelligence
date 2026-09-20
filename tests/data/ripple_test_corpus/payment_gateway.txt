@@ -1,0 +1,11 @@
+Payment Gateway Architecture
+
+The Payment Gateway processes payment requests received from the Payment API.
+
+The Payment Gateway communicates with external payment providers.
+
+The Payment Gateway supports the Checkout Workflow.
+
+Payment Gateway failures can affect payment confirmation.
+
+The Payment Gateway is maintained by the Payments Team.

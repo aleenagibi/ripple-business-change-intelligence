@@ -1,0 +1,11 @@
+Refund Policy
+
+Refunds are issued for eligible customer transactions.
+
+Refund requests reference the original Payment transaction.
+
+The Payment module must provide transaction information required for refund processing.
+
+Refund processing is handled by the Payments Team.
+
+Changes to payment transaction rules may require corresponding changes to this policy.
