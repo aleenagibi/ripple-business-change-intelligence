@@ -1,4 +1,6 @@
-const API_BASE_URL = 'http://localhost:8000/api'
+// const API_BASE_URL = 'http://localhost:8000/api'
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'
 const TOKEN_KEY = 'ripple_access_token'
 
 export const AUTH_EXPIRED_EVENT = 'ripple-auth-expired'
