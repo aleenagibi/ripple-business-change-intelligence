@@ -1,37 +1,10 @@
-"""
-Hugging Face ZeroGPU deployment adapter for Ripple.
-
-This module is deployment-specific.
-
-Ripple's existing application architecture remains unchanged:
-
-    React
-        ↓
-    FastAPI
-        ↓
-    Ripple Services
-        ↓
-    Hybrid Retrieval
-        ↓
-    Knowledge Graph
-        ↓
-    Impact Analysis
-
-The adapter provides the Hugging Face ZeroGPU runtime while preserving
-Ripple's existing REST API contract.
-"""
-
 from __future__ import annotations
 
 import asyncio
-import os
 from io import BytesIO
 from typing import Generator
 from uuid import UUID
 
-# IMPORTANT:
-# spaces must be imported before torch/sentence-transformers so that
-# ZeroGPU can install its CUDA interception layer.
 import spaces
 from fastapi import Depends, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -55,10 +28,6 @@ from app.services.document_service import DocumentService
 from app.services.impact_analysis_service import ImpactAnalysisService
 
 
-# ---------------------------------------------------------------------------
-# Gradio Server
-# ---------------------------------------------------------------------------
-
 server = Server(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
@@ -67,10 +36,6 @@ server = Server(
     redoc_url="/redoc",
 )
 
-
-# ---------------------------------------------------------------------------
-# Middleware
-# ---------------------------------------------------------------------------
 
 server.add_middleware(
     CORSMiddleware,
@@ -84,20 +49,8 @@ server.add_middleware(
 )
 
 
-# ---------------------------------------------------------------------------
-# Database helper
-# ---------------------------------------------------------------------------
-
 def _open_database_session() -> Generator[Session, None, None]:
-    """
-    Open a database session for a ZeroGPU worker.
-
-    SQLAlchemy Session objects are created inside the worker and are
-    never passed across the ZeroGPU execution boundary.
-    """
-
     database_generator = get_db()
-
     db = next(database_generator)
 
     try:
@@ -106,10 +59,6 @@ def _open_database_session() -> Generator[Session, None, None]:
         database_generator.close()
 
 
-# ---------------------------------------------------------------------------
-# GPU execution boundary — Impact Analysis
-# ---------------------------------------------------------------------------
-
 @spaces.GPU(duration=120)
 def _run_impact_analysis_on_gpu(
     organization_id: str,
@@ -117,13 +66,6 @@ def _run_impact_analysis_on_gpu(
     top_k: int,
     max_distance: int,
 ) -> list:
-    """
-    Execute Ripple's complete impact-analysis pipeline inside ZeroGPU.
-
-    The function accepts only primitive serializable values and creates
-    its own database session inside the ZeroGPU execution boundary.
-    """
-
     organization_uuid = UUID(organization_id)
 
     database_generator = get_db()
@@ -138,14 +80,9 @@ def _run_impact_analysis_on_gpu(
             top_k=top_k,
             max_distance=max_distance,
         )
-
     finally:
         database_generator.close()
 
-
-# ---------------------------------------------------------------------------
-# GPU execution boundary — Document Ingestion
-# ---------------------------------------------------------------------------
 
 @spaces.GPU(duration=120)
 def _upload_document_on_gpu(
@@ -154,17 +91,6 @@ def _upload_document_on_gpu(
     content_type: str,
     file_bytes: bytes,
 ) -> DocumentResponse:
-    """
-    Execute Ripple document ingestion inside the ZeroGPU boundary.
-
-    The complete DocumentService lifecycle is created inside this
-    function because entity canonical resolution may initialize a
-    SentenceTransformer model.
-
-    The GPU worker is intentionally synchronous because the current
-    ZeroGPU decorator does not support async functions.
-    """
-
     organization_uuid = UUID(organization_id)
 
     database_generator = get_db()
@@ -197,7 +123,7 @@ def _upload_document_on_gpu(
 
 
 # ---------------------------------------------------------------------------
-# Authentication / Organization routes
+# Authentication
 # ---------------------------------------------------------------------------
 
 server.include_router(
@@ -212,12 +138,14 @@ server.include_router(
 
 
 # ---------------------------------------------------------------------------
-# ZeroGPU-compatible Document Upload Endpoint
+# Document upload
+#
+# POST is deployment-specific because document processing initializes
+# NLP / embedding models and therefore must execute inside ZeroGPU.
 # ---------------------------------------------------------------------------
 
 @server.post(
-    f"{settings.API_PREFIX}"
-    "/organizations/{organization_id}/documents",
+    f"{settings.API_PREFIX}/organizations/{{organization_id}}/documents",
     response_model=DocumentResponse,
     status_code=201,
     tags=["Documents"],
@@ -228,18 +156,6 @@ def upload_document(
     _: User = Depends(require_organization_access),
     db: Session = Depends(get_db),
 ) -> DocumentResponse:
-    """
-    Upload and process a business document through ZeroGPU.
-
-    Authentication and organization access are validated outside the
-    GPU worker.
-
-    The actual document processing pipeline is executed inside the
-    ZeroGPU boundary.
-    """
-
-    # This dependency session is only required for authentication and
-    # organization authorization. The GPU worker creates its own session.
     del db
 
     try:
@@ -251,23 +167,17 @@ def upload_document(
                 detail="Uploaded file is empty.",
             )
 
-        # Prevent unnecessarily loading files larger than Ripple's
-        # existing 25 MB document limit into the GPU worker.
         if len(file_bytes) > DocumentService.MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "File exceeds the maximum allowed size of 25 MB."
-                ),
+                detail="File exceeds the maximum allowed size of 25 MB.",
             )
 
         return _upload_document_on_gpu(
             organization_id=str(organization_id),
             filename=file.filename or "",
-            content_type=(
-                file.content_type
-                or "application/octet-stream"
-            ),
+            content_type=file.content_type
+            or "application/octet-stream",
             file_bytes=file_bytes,
         )
 
@@ -290,12 +200,74 @@ def upload_document(
 
 
 # ---------------------------------------------------------------------------
-# ZeroGPU-compatible Impact Analysis Endpoint
+# Document listing
+#
+# GET does not perform NLP processing. It only reads persisted documents
+# from PostgreSQL.
+# ---------------------------------------------------------------------------
+
+@server.get(
+    f"{settings.API_PREFIX}/organizations/{{organization_id}}/documents",
+    response_model=list[DocumentResponse],
+    tags=["Documents"],
+)
+def list_documents(
+    organization_id: UUID,
+    _: User = Depends(require_organization_access),
+    db: Session = Depends(get_db),
+) -> list[DocumentResponse]:
+    service = DocumentService(db)
+
+    documents = service.document_repository.list_by_organization(
+        organization_id,
+    )
+
+    return [
+        DocumentResponse.model_validate(document)
+        for document in documents
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Single document
+# ---------------------------------------------------------------------------
+
+@server.get(
+    f"{settings.API_PREFIX}/organizations/{{organization_id}}/documents/{{document_id}}",
+    response_model=DocumentResponse,
+    tags=["Documents"],
+)
+def get_document(
+    organization_id: UUID,
+    document_id: UUID,
+    _: User = Depends(require_organization_access),
+    db: Session = Depends(get_db),
+) -> DocumentResponse:
+    service = DocumentService(db)
+
+    document = service.document_repository.get_by_id(
+        document_id=document_id,
+        organization_id=organization_id,
+    )
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    return DocumentResponse.model_validate(document)
+
+
+# ---------------------------------------------------------------------------
+# Impact analysis
+#
+# The analysis itself uses embedding models and therefore executes inside
+# ZeroGPU.
 # ---------------------------------------------------------------------------
 
 @server.post(
-    f"{settings.API_PREFIX}"
-    "/organizations/{organization_id}/retrieval/impact-analysis",
+    f"{settings.API_PREFIX}/organizations/{{organization_id}}/retrieval/impact-analysis",
     response_model=list[ImpactAnalysisResult],
     tags=["Retrieval"],
 )
@@ -305,17 +277,6 @@ def impact_analysis(
     _: User = Depends(require_organization_access),
     db: Session = Depends(get_db),
 ) -> list[ImpactAnalysisResult]:
-    """
-    Analyze the potential business impact of a requirement change.
-
-    Authentication and organization access are validated outside the
-    GPU worker.
-
-    The NLP-heavy impact-analysis pipeline is executed inside ZeroGPU.
-    """
-
-    # The dependency session is intentionally used for authentication
-    # only. The GPU worker creates its own independent database session.
     del db
 
     results = _run_impact_analysis_on_gpu(
@@ -350,7 +311,7 @@ def impact_analysis(
 
 
 # ---------------------------------------------------------------------------
-# Remaining Retrieval Routes
+# Existing retrieval routes
 # ---------------------------------------------------------------------------
 
 server.include_router(
@@ -363,10 +324,7 @@ server.include_router(
 # Root
 # ---------------------------------------------------------------------------
 
-@server.get(
-    "/",
-    tags=["Root"],
-)
+@server.get("/")
 async def root() -> dict[str, str]:
     return {
         "application": settings.APP_NAME,
@@ -376,13 +334,10 @@ async def root() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Hugging Face Health Check
+# Hugging Face health check
 # ---------------------------------------------------------------------------
 
-@server.get(
-    "/hf-health",
-    tags=["Health"],
-)
+@server.get("/hf-health")
 async def hf_health() -> dict[str, str]:
     return {
         "status": "healthy",
@@ -391,15 +346,8 @@ async def hf_health() -> dict[str, str]:
     }
 
 
-# ---------------------------------------------------------------------------
-# Entrypoint
-# ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     server.launch(
         server_name="0.0.0.0",
-        server_port=int(
-            os.getenv("PORT", "7860")
-        ),
-        show_error=True,
+        server_port=7860,
     )
