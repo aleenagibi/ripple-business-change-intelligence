@@ -1,7 +1,10 @@
 """
 Hugging Face ZeroGPU deployment adapter for Ripple.
+
 This module is deployment-specific.
+
 Ripple's existing application architecture remains unchanged:
+
     React
         ↓
     FastAPI
@@ -13,12 +16,14 @@ Ripple's existing application architecture remains unchanged:
     Knowledge Graph
         ↓
     Impact Analysis
+
 The adapter provides the Hugging Face ZeroGPU runtime while preserving
 Ripple's existing REST API contract.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from io import BytesIO
 from typing import Generator
@@ -29,6 +34,7 @@ from uuid import UUID
 # ZeroGPU can install its CUDA interception layer.
 import spaces
 from fastapi import Depends, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from gradio import Server
 from sqlalchemy.orm import Session
 from starlette.datastructures import Headers
@@ -48,6 +54,7 @@ from app.schemas.retrieval import (
 from app.services.document_service import DocumentService
 from app.services.impact_analysis_service import ImpactAnalysisService
 
+
 # ---------------------------------------------------------------------------
 # Gradio Server
 # ---------------------------------------------------------------------------
@@ -64,13 +71,6 @@ server = Server(
 # ---------------------------------------------------------------------------
 # Middleware
 # ---------------------------------------------------------------------------
-#
-# Ripple already defines its CORS policy in app.main.
-# Recreate the same policy here so the React frontend can communicate
-# with the Hugging Face backend.
-#
-
-from fastapi.middleware.cors import CORSMiddleware
 
 server.add_middleware(
     CORSMiddleware,
@@ -84,15 +84,15 @@ server.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Database helper for ZeroGPU worker
+# Database helper
 # ---------------------------------------------------------------------------
 
 def _open_database_session() -> Generator[Session, None, None]:
     """
-    Open a database session for the ZeroGPU worker.
-    A separate session is created inside the GPU execution boundary.
-    SQLAlchemy Session objects should not be passed into a ZeroGPU worker
-    as function arguments.
+    Open a database session for a ZeroGPU worker.
+
+    SQLAlchemy Session objects are created inside the worker and are
+    never passed across the ZeroGPU execution boundary.
     """
 
     database_generator = get_db()
@@ -106,7 +106,7 @@ def _open_database_session() -> Generator[Session, None, None]:
 
 
 # ---------------------------------------------------------------------------
-# GPU execution boundary
+# GPU execution boundary — Impact Analysis
 # ---------------------------------------------------------------------------
 
 @spaces.GPU(duration=120)
@@ -118,13 +118,9 @@ def _run_impact_analysis_on_gpu(
 ) -> list:
     """
     Execute Ripple's complete impact-analysis pipeline inside ZeroGPU.
-    The function accepts only primitive serializable values. It creates
+
+    The function accepts only primitive serializable values and creates
     its own database session inside the ZeroGPU execution boundary.
-    This allows the existing Ripple services to remain unchanged while
-    Sentence Transformer inference performed by:
-        DenseRetrievalEngine
-        ImpactAnalysisService
-    executes while the ZeroGPU allocation is active.
     """
 
     organization_uuid = UUID(organization_id)
@@ -145,19 +141,27 @@ def _run_impact_analysis_on_gpu(
     finally:
         database_generator.close()
 
+
+# ---------------------------------------------------------------------------
+# GPU execution boundary — Document Ingestion
+# ---------------------------------------------------------------------------
+
 @spaces.GPU(duration=120)
-async def _upload_document_on_gpu(
+def _upload_document_on_gpu(
     organization_id: str,
     filename: str,
     content_type: str,
     file_bytes: bytes,
 ) -> DocumentResponse:
     """
-    Execute document ingestion inside the ZeroGPU boundary.
+    Execute Ripple document ingestion inside the ZeroGPU boundary.
 
-    The entire DocumentService lifecycle is created inside the GPU
-    execution context because entity canonical resolution may initialize
-    a SentenceTransformer model.
+    The complete DocumentService lifecycle is created inside this
+    function because entity canonical resolution may initialize a
+    SentenceTransformer model.
+
+    The GPU worker is intentionally synchronous because the current
+    ZeroGPU decorator does not support async functions.
     """
 
     organization_uuid = UUID(organization_id)
@@ -178,15 +182,37 @@ async def _upload_document_on_gpu(
     try:
         service = DocumentService(db)
 
-        document = await service.upload(
-            organization_id=organization_uuid,
-            upload=upload,
+        document = asyncio.run(
+            service.upload(
+                organization_id=organization_uuid,
+                upload=upload,
+            )
         )
 
         return DocumentResponse.model_validate(document)
 
     finally:
         database_generator.close()
+
+
+# ---------------------------------------------------------------------------
+# Authentication / Organization routes
+# ---------------------------------------------------------------------------
+
+server.include_router(
+    auth_router,
+    prefix=settings.API_PREFIX,
+)
+
+server.include_router(
+    organization_router,
+    prefix=settings.API_PREFIX,
+)
+
+
+# ---------------------------------------------------------------------------
+# ZeroGPU-compatible Document Upload Endpoint
+# ---------------------------------------------------------------------------
 
 @server.post(
     f"{settings.API_PREFIX}"
@@ -195,25 +221,28 @@ async def _upload_document_on_gpu(
     status_code=201,
     tags=["Documents"],
 )
-async def upload_document(
+def upload_document(
     organization_id: UUID,
     file: UploadFile = File(...),
     _: User = Depends(require_organization_access),
     db: Session = Depends(get_db),
 ) -> DocumentResponse:
     """
-    Upload and process a business document through the ZeroGPU
-    execution boundary.
+    Upload and process a business document through ZeroGPU.
 
-    Authentication is performed outside the GPU worker.
-    Document processing, including semantic entity resolution,
-    occurs inside the GPU worker.
+    Authentication and organization access are validated outside the
+    GPU worker.
+
+    The actual document processing pipeline is executed inside the
+    ZeroGPU boundary.
     """
 
+    # This dependency session is only required for authentication and
+    # organization authorization. The GPU worker creates its own session.
     del db
 
     try:
-        file_bytes = await file.read()
+        file_bytes = file.file.read()
 
         if not file_bytes:
             raise HTTPException(
@@ -221,11 +250,23 @@ async def upload_document(
                 detail="Uploaded file is empty.",
             )
 
-        return await _upload_document_on_gpu(
+        # Prevent unnecessarily loading files larger than Ripple's
+        # existing 25 MB document limit into the GPU worker.
+        if len(file_bytes) > DocumentService.MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "File exceeds the maximum allowed size of 25 MB."
+                ),
+            )
+
+        return _upload_document_on_gpu(
             organization_id=str(organization_id),
             filename=file.filename or "",
-            content_type=file.content_type
-            or "application/octet-stream",
+            content_type=(
+                file.content_type
+                or "application/octet-stream"
+            ),
             file_bytes=file_bytes,
         )
 
@@ -242,42 +283,13 @@ async def upload_document(
             status_code=400,
             detail=message,
         ) from exc
-# ---------------------------------------------------------------------------
-# Existing authentication / organization / document routes
-# ---------------------------------------------------------------------------
 
-server.include_router(
-    auth_router,
-    prefix=settings.API_PREFIX,
-)
-
-server.include_router(
-    organization_router,
-    prefix=settings.API_PREFIX,
-)
-
-
+    finally:
+        file.file.close()
 
 
 # ---------------------------------------------------------------------------
-# Existing retrieval routes except impact-analysis
-# ---------------------------------------------------------------------------
-#
-# The existing retrieval router contains:
-#
-#   /tfidf
-#   /dense
-#   /hybrid
-#   /impact-analysis
-#
-# We register the normal retrieval router after our deployment-specific
-# impact-analysis route below. FastAPI uses route order, so the
-# deployment-specific route handles /impact-analysis while the existing
-# router continues to handle TF-IDF, dense, and hybrid retrieval.
-#
-
-# ---------------------------------------------------------------------------
-# ZeroGPU-compatible impact-analysis endpoint
+# ZeroGPU-compatible Impact Analysis Endpoint
 # ---------------------------------------------------------------------------
 
 @server.post(
@@ -294,10 +306,11 @@ def impact_analysis(
 ) -> list[ImpactAnalysisResult]:
     """
     Analyze the potential business impact of a requirement change.
-    Authentication and organization access are validated by the normal
-    FastAPI dependency system.
-    The actual NLP-heavy impact-analysis pipeline is then executed
-    through the ZeroGPU boundary.
+
+    Authentication and organization access are validated outside the
+    GPU worker.
+
+    The NLP-heavy impact-analysis pipeline is executed inside ZeroGPU.
     """
 
     # The dependency session is intentionally used for authentication
@@ -336,7 +349,7 @@ def impact_analysis(
 
 
 # ---------------------------------------------------------------------------
-# Remaining retrieval routes
+# Remaining Retrieval Routes
 # ---------------------------------------------------------------------------
 
 server.include_router(
@@ -346,7 +359,7 @@ server.include_router(
 
 
 # ---------------------------------------------------------------------------
-# Root and health endpoints
+# Root
 # ---------------------------------------------------------------------------
 
 @server.get(
@@ -360,6 +373,10 @@ async def root() -> dict[str, str]:
         "status": "running",
     }
 
+
+# ---------------------------------------------------------------------------
+# Hugging Face Health Check
+# ---------------------------------------------------------------------------
 
 @server.get(
     "/hf-health",
