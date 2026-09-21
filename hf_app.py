@@ -20,6 +20,7 @@ Ripple's existing REST API contract.
 from __future__ import annotations
 
 import os
+from io import BytesIO
 from typing import Generator
 from uuid import UUID
 
@@ -27,25 +28,25 @@ from uuid import UUID
 # spaces must be imported before torch/sentence-transformers so that
 # ZeroGPU can install its CUDA interception layer.
 import spaces
-
+from fastapi import Depends, File, HTTPException, UploadFile
 from gradio import Server
-from fastapi import Depends
 from sqlalchemy.orm import Session
+from starlette.datastructures import Headers
 
 from app.api.auth_dependencies import require_organization_access
 from app.api.auth_routes import router as auth_router
-from app.api.document_routes import router as document_router
 from app.api.organization_routes import router as organization_router
 from app.api.retrieval_routes import router as retrieval_router
 from app.core.config import settings
 from app.db.database import get_db
 from app.models.user import User
+from app.schemas.document import DocumentResponse
 from app.schemas.retrieval import (
     ImpactAnalysisRequest,
     ImpactAnalysisResult,
 )
+from app.services.document_service import DocumentService
 from app.services.impact_analysis_service import ImpactAnalysisService
-
 
 # ---------------------------------------------------------------------------
 # Gradio Server
@@ -70,7 +71,6 @@ server = Server(
 #
 
 from fastapi.middleware.cors import CORSMiddleware
-
 
 server.add_middleware(
     CORSMiddleware,
@@ -145,7 +145,103 @@ def _run_impact_analysis_on_gpu(
     finally:
         database_generator.close()
 
+@spaces.GPU(duration=120)
+async def _upload_document_on_gpu(
+    organization_id: str,
+    filename: str,
+    content_type: str,
+    file_bytes: bytes,
+) -> DocumentResponse:
+    """
+    Execute document ingestion inside the ZeroGPU boundary.
 
+    The entire DocumentService lifecycle is created inside the GPU
+    execution context because entity canonical resolution may initialize
+    a SentenceTransformer model.
+    """
+
+    organization_uuid = UUID(organization_id)
+
+    database_generator = get_db()
+    db = next(database_generator)
+
+    upload = UploadFile(
+        filename=filename,
+        file=BytesIO(file_bytes),
+        headers=Headers(
+            {
+                "content-type": content_type,
+            }
+        ),
+    )
+
+    try:
+        service = DocumentService(db)
+
+        document = await service.upload(
+            organization_id=organization_uuid,
+            upload=upload,
+        )
+
+        return DocumentResponse.model_validate(document)
+
+    finally:
+        database_generator.close()
+
+@server.post(
+    f"{settings.API_PREFIX}"
+    "/organizations/{organization_id}/documents",
+    response_model=DocumentResponse,
+    status_code=201,
+    tags=["Documents"],
+)
+async def upload_document(
+    organization_id: UUID,
+    file: UploadFile = File(...),
+    _: User = Depends(require_organization_access),
+    db: Session = Depends(get_db),
+) -> DocumentResponse:
+    """
+    Upload and process a business document through the ZeroGPU
+    execution boundary.
+
+    Authentication is performed outside the GPU worker.
+    Document processing, including semantic entity resolution,
+    occurs inside the GPU worker.
+    """
+
+    del db
+
+    try:
+        file_bytes = await file.read()
+
+        if not file_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded file is empty.",
+            )
+
+        return await _upload_document_on_gpu(
+            organization_id=str(organization_id),
+            filename=file.filename or "",
+            content_type=file.content_type
+            or "application/octet-stream",
+            file_bytes=file_bytes,
+        )
+
+    except ValueError as exc:
+        message = str(exc)
+
+        if message == "Organization not found.":
+            raise HTTPException(
+                status_code=404,
+                detail=message,
+            ) from exc
+
+        raise HTTPException(
+            status_code=400,
+            detail=message,
+        ) from exc
 # ---------------------------------------------------------------------------
 # Existing authentication / organization / document routes
 # ---------------------------------------------------------------------------
@@ -160,10 +256,7 @@ server.include_router(
     prefix=settings.API_PREFIX,
 )
 
-server.include_router(
-    document_router,
-    prefix=settings.API_PREFIX,
-)
+
 
 
 # ---------------------------------------------------------------------------
