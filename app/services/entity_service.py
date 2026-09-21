@@ -21,9 +21,7 @@ class EntityService:
         self.db = db
         self.repository = EntityRepository(db)
         self.engine = EntityExtractionEngine()
-        self.canonical_resolution_engine = (
-            CanonicalResolutionEngine()
-        )
+        self.canonical_resolution_engine: CanonicalResolutionEngine | None = None
 
     def process_chunk(
         self,
@@ -137,6 +135,9 @@ class EntityService:
             # -----------------------------------------------------
 
             if canonical_entity is None:
+
+                if self.canonical_resolution_engine is None:
+                    self.canonical_resolution_engine = CanonicalResolutionEngine()
 
                 semantic_match = (
                     self.canonical_resolution_engine.find_best_match(
