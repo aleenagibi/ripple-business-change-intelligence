@@ -39,7 +39,32 @@ class DocumentService:
         self.extraction_service = DocumentExtractionService()
         self.chunk_service = ChunkService(db)
         
+    def get_document_details(
+        self,
+        document_id: UUID,
+        organization_id: UUID,
+    ) -> tuple[Document | None, dict[str, int]]:
+        """Return a document and its derived Ripple index statistics."""
 
+        document = self.document_repository.get_by_id(
+            document_id=document_id,
+            organization_id=organization_id,
+        )
+
+        if document is None:
+            return None, {
+                "chunk_count": 0,
+                "entity_count": 0,
+                "relationship_count": 0,
+            }
+
+        index_stats = self.document_repository.get_index_stats(
+            document_id=document_id,
+            organization_id=organization_id,
+        )
+
+        return document, index_stats                                    
+    
     async def upload(
         self,
         organization_id: UUID,

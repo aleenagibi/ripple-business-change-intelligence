@@ -1,5 +1,13 @@
 import { apiFetch } from './client'
 
+export interface DocumentIndexStats {
+  file_size_bytes: number
+  chunk_count: number
+  entity_count: number
+  relationship_count: number
+  retrieval_method: string
+}
+
 export interface Document {
   id: string
   organization_id: string
@@ -8,6 +16,20 @@ export interface Document {
   mime_type: string
   processing_status: string
   created_at: string
+  index_stats?: DocumentIndexStats
+}
+
+export interface UploadQueueItem {
+  id: string
+  file: File
+  status:
+    | 'waiting'
+    | 'uploading'
+    | 'processing'
+    | 'completed'
+    | 'failed'
+  document?: Document
+  error?: string
 }
 
 export async function getDocuments(

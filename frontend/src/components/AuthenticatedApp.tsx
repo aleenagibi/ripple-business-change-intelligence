@@ -14,7 +14,10 @@ import {
 import { analyzeImpact } from '../api/impact'
 
 import type { AuthOrganization, AuthUser } from '../api/auth'
-import type { Document } from '../api/documents'
+import type {
+  Document,
+  UploadQueueItem,
+} from '../api/documents'
 import type { ImpactResult } from '../api/impact'
 
 type Page =
@@ -132,6 +135,9 @@ function AuthenticatedApp({
     useState(false)
   const [selectedFiles, setSelectedFiles] =
     useState<File[]>([])
+  
+  const [uploadQueue, setUploadQueue] =
+    useState<UploadQueueItem[]>([])
 
   const [query, setQuery] =
     useState('')
@@ -197,45 +203,133 @@ function AuthenticatedApp({
   }, [organization.id])
 
   async function uploadDocuments() {
-    if (selectedFiles.length === 0) {
-      setError(
-        'Select at least one document to upload.',
+  if (selectedFiles.length === 0) {
+    setError('Select at least one document to upload.')
+    return
+  }
+
+  setUploading(true)
+  setError(null)
+
+  const queue: UploadQueueItem[] = selectedFiles.map(
+    (file) => ({
+      id: `${file.name}-${file.size}-${file.lastModified}`,
+      file,
+      status: 'waiting',
+    }),
+  )
+
+  setUploadQueue(queue)
+
+  try {
+    for (const item of queue) {
+      setUploadQueue((current) =>
+        current.map((queueItem) =>
+          queueItem.id === item.id
+            ? {
+                ...queueItem,
+                status: 'uploading',
+                error: undefined,
+              }
+            : queueItem,
+        ),
       )
-      return
-    }
 
-    setUploading(true)
-    setError(null)
-
-    try {
-      const uploadedDocuments: Document[] = []
-
-      for (const file of selectedFiles) {
+      try {
         const document =
           await uploadDocumentRequest(
             organization.id,
-            file,
+            item.file,
           )
-
-        uploadedDocuments.push(document)
 
         setDocuments((current) => [
           document,
-          ...current,
+          ...current.filter(
+            (existing) =>
+              existing.id !== document.id,
+          ),
         ])
-      }
 
-      setSelectedFiles([])
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Failed to upload documents.',
-      )
-    } finally {
-      setUploading(false)
+        const processingStatus =
+          document.processing_status.toLowerCase()
+
+        if (
+          processingStatus === 'completed' ||
+          processingStatus === 'complete' ||
+          processingStatus === 'ready'
+        ) {
+          setUploadQueue((current) =>
+            current.map((queueItem) =>
+              queueItem.id === item.id
+                ? {
+                    ...queueItem,
+                    status: 'completed',
+                    document,
+                  }
+                : queueItem,
+            ),
+          )
+
+          continue
+        }
+
+        if (
+          processingStatus === 'failed' ||
+          processingStatus === 'error'
+        ) {
+          setUploadQueue((current) =>
+            current.map((queueItem) =>
+              queueItem.id === item.id
+                ? {
+                    ...queueItem,
+                    status: 'failed',
+                    document,
+                    error:
+                      'Document processing failed.',
+                  }
+                : queueItem,
+            ),
+          )
+
+          continue
+        }
+
+        setUploadQueue((current) =>
+          current.map((queueItem) =>
+            queueItem.id === item.id
+              ? {
+                  ...queueItem,
+                  status: 'processing',
+                  document,
+                }
+              : queueItem,
+          ),
+        )
+      } catch (err) {
+        const message =
+          err instanceof Error
+            ? err.message
+            : 'Failed to upload document.'
+
+        setUploadQueue((current) =>
+          current.map((queueItem) =>
+            queueItem.id === item.id
+              ? {
+                  ...queueItem,
+                  status: 'failed',
+                  error: message,
+                }
+              : queueItem,
+          ),
+        )
+      }
     }
+
+    setSelectedFiles([])
+  } finally {
+    setUploading(false)
   }
+}
   async function handleViewDocumentDetails(
     documentId: string,
   ) {
@@ -297,22 +391,31 @@ function AuthenticatedApp({
     }
   }
 
-  function handleFileChange(
-    event: ChangeEvent<HTMLInputElement>,
-  ) {
-    const files = Array.from(
-      event.target.files ?? [],
-    )
+function handleFileChange(
+  event: ChangeEvent<HTMLInputElement>,
+) {
+  const files = Array.from(
+    event.target.files ?? [],
+  )
 
-    setSelectedFiles(files)
-    setError(null)
+  setSelectedFiles(files)
 
-    /*
-     * Reset the input value so the same file/folder
-     * can be selected again after an upload.
-     */
-    event.target.value = ''
-  }
+  setUploadQueue(
+    files.map((file) => ({
+      id: `${file.name}-${file.size}-${file.lastModified}`,
+      file,
+      status: 'waiting',
+    })),
+  )
+
+  setError(null)
+
+  /*
+   * Reset the input value so the same file/folder
+   * can be selected again after an upload.
+   */
+  event.target.value = ''
+}
 
   return (
     <div
@@ -487,6 +590,7 @@ function AuthenticatedApp({
                 organization={organization}
                 documents={documents}
                 selectedFiles={selectedFiles}
+                uploadQueue={uploadQueue}
                 loadingDocuments={loadingDocuments}
                 uploading={uploading}
                 error={error}

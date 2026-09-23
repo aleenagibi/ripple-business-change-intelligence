@@ -11,6 +11,7 @@ import ReactFlow, {
   type NodeProps,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
+import type { ImpactResult } from '../api/impact'
 
 interface Organization {
   id: string
@@ -18,26 +19,26 @@ interface Organization {
   slug: string
 }
 
-interface ImpactSourceDocument {
-  document_id: string
-  filename: string
-}
+// interface ImpactSourceDocument {
+//   document_id: string
+//   filename: string
+// }
 
-interface ImpactResult {
-  entity_id: string
-  name: string
-  entity_type: string
-  impact_score: number
-  impact_level: string
-  semantic_relevance: number
-  relationship_strength: number
-  graph_proximity: number
-  entity_importance: number
-  propagation_distance: number
-  path: string[]
-  explanation: string
-  source_documents: ImpactSourceDocument[]
-}
+// interface ImpactResult {
+//   entity_id: string
+//   name: string
+//   entity_type: string
+//   impact_score: number
+//   impact_level: string
+//   semantic_relevance: number
+//   relationship_strength: number
+//   graph_proximity: number
+//   entity_importance: number
+//   propagation_distance: number
+//   path: string[]
+//   explanation: string
+//   source_documents: ImpactSourceDocument[]
+// }
 
 interface ImpactAnalysisPageProps {
   organization: Organization

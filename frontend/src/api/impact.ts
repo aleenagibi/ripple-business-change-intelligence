@@ -1,5 +1,9 @@
 import { apiFetch } from './client'
 
+export interface ImpactSourceDocument {
+  document_id: string
+  filename: string
+}
 export interface ImpactResult {
   entity_id: string
   name: string
@@ -13,6 +17,7 @@ export interface ImpactResult {
   propagation_distance: number
   path: string[]
   explanation: string
+  source_documents: ImpactSourceDocument[]
 }
 
 export interface ImpactAnalysisRequest {

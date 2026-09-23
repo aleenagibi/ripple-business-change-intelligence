@@ -5,16 +5,10 @@ import type {
   InputHTMLAttributes,
   KeyboardEvent,
 } from 'react'
-
-interface Document {
-  id: string
-  organization_id: string
-  filename: string
-  document_type: string
-  mime_type: string
-  processing_status: string
-  created_at: string
-}
+import type {
+  Document,
+  UploadQueueItem,
+} from '../api/documents'
 
 interface Organization {
   id: string
@@ -31,7 +25,7 @@ interface DocumentsPageProps {
   error: string | null
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void
   onUploadDocuments: () => void
-
+uploadQueue: UploadQueueItem[]
   selectedDocument: Document | null
   loadingDocumentDetails: boolean
   onViewDocumentDetails: (
@@ -94,6 +88,26 @@ function formatDate(value: string) {
     day: '2-digit',
     year: 'numeric',
   }).format(date)
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes === 0) {
+    return '0 B'
+  }
+
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`
+  }
+
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
+
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
 }
 
 function formatCategory(value: string) {
@@ -218,6 +232,7 @@ function DocumentsPage({
   organization,
   documents,
   selectedFiles,
+   uploadQueue,
   loadingDocuments,
   uploading,
   error,
@@ -567,49 +582,128 @@ function DocumentsPage({
         </p>
       </div>
 
-      {selectedFiles.length > 0 && (
-        <div
-          className="analysis-form-footer"
-          style={{ marginBottom: 18 }}
-        >
-          <div>
-            <strong>
-              {selectedFiles.length}{' '}
-              {selectedFiles.length === 1
-                ? 'document selected'
-                : 'documents selected'}
-            </strong>
+{selectedFiles.length > 0 && (
+  <section className="upload-queue" aria-label="Document upload queue">
+    <div className="upload-queue-header">
+      <div>
+        <span className="eyebrow">Upload queue</span>
 
-            <div className="selected-file-list">
-              {selectedFiles.map((file) => (
-                <span
-                  key={`${file.name}-${file.lastModified}-${file.size}`}
-                >
-                  {file.name}
-                </span>
-              ))}
-            </div>
-          </div>
+        <h2>
+          {selectedFiles.length}{' '}
+          {selectedFiles.length === 1
+            ? 'document'
+            : 'documents'}
+        </h2>
 
-          <button
-            type="button"
-            className="primary-button"
-            onClick={onUploadDocuments}
-            disabled={
-              !organization ||
-              uploading ||
-              processingDrop
-            }
-          >
-            {uploading
-              ? 'Uploading...'
-              : `Upload ${selectedFiles.length} ${selectedFiles.length === 1
+        <p>
+          Documents are processed and indexed into Ripple's
+          semantic and knowledge graph layers.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        className="primary-button upload-queue-submit"
+        onClick={onUploadDocuments}
+        disabled={
+          !organization ||
+          uploading ||
+          processingDrop
+        }
+      >
+        {uploading
+          ? 'Processing...'
+          : `Upload ${selectedFiles.length} ${
+              selectedFiles.length === 1
                 ? 'document'
                 : 'documents'
-              }`}
-          </button>
-        </div>
-      )}
+            }`}
+      </button>
+    </div>
+
+    <div className="upload-queue-list">
+      {selectedFiles.map((file) => {
+        const queueId = `${file.name}-${file.size}-${file.lastModified}`
+        const queueItem = uploadQueue.find(
+          (item) => item.id === queueId,
+        )
+
+        const status = queueItem?.status ?? 'waiting'
+
+        return (
+          <div
+            className={`upload-queue-item upload-queue-item-${status}`}
+            key={queueId}
+          >
+            <div className="upload-queue-file-icon">
+              {fileExtension(file.name)}
+            </div>
+
+            <div className="upload-queue-file">
+              <strong title={file.name}>
+                {file.name}
+              </strong>
+
+              <span>
+                {(file.size / 1024).toFixed(1)} KB
+              </span>
+            </div>
+
+            <div className="upload-queue-status">
+              {status === 'waiting' && (
+                <>
+                  <span className="upload-status-dot" />
+                  Waiting
+                </>
+              )}
+
+              {status === 'uploading' && (
+                <>
+                  <span className="upload-status-spinner" />
+                  Uploading
+                </>
+              )}
+
+              {status === 'processing' && (
+                <>
+                  <span className="upload-status-spinner" />
+                  Indexing
+                </>
+              )}
+
+              {status === 'completed' && (
+                <>
+                  <span className="upload-status-check">
+                    ✓
+                  </span>
+                  Indexed
+                </>
+              )}
+
+              {status === 'failed' && (
+                <>
+                  <span className="upload-status-error">
+                    !
+                  </span>
+                  Failed
+                </>
+              )}
+            </div>
+
+            {status === 'failed' && queueItem?.error && (
+              <span
+                className="upload-queue-error"
+                title={queueItem.error}
+              >
+                {queueItem.error}
+              </span>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  </section>
+)}
 
       <div className="panel document-panel document-table-panel">
         <div className="document-table-header">
@@ -717,8 +811,6 @@ function DocumentsPage({
           <div className="document-table">
             <div className="document-table-head">
               <span>NAME</span>
-              <span>CATEGORY</span>
-              <span>SIZE</span>
               <span>UPLOADED</span>
               <span>VECTOR STATUS</span>
               <span>ACTIONS</span>
@@ -726,18 +818,7 @@ function DocumentsPage({
 
             {filteredDocuments.map(
               (document) => {
-                const categoryName =
-                  formatCategory(
-                    document.document_type,
-                  )
-
-                const categoryClass =
-                  categoryName
-                    .toLowerCase()
-                    .replace(
-                      /\s+/g,
-                      '-',
-                    )
+            
 
                 return (
                   <div
@@ -763,17 +844,7 @@ function DocumentsPage({
                       </div>
                     </div>
 
-                    <div>
-                      <span
-                        className={`document-category-badge document-category-${categoryClass}`}
-                      >
-                        {categoryName}
-                      </span>
-                    </div>
-
-                    <div className="document-meta-cell">
-                      —
-                    </div>
+                    
 
                     <div className="document-meta-cell">
                       {formatDate(
@@ -919,7 +990,61 @@ function DocumentsPage({
                     </strong>
                   </div>
                 </div>
+                <div className="document-details-section">
+                  <span className="document-details-section-title">
+                    RIPPLE INDEX
+                  </span>
 
+                  <div className="document-details-row">
+                    <span>File size</span>
+
+                    <strong>
+                      {selectedDocument.index_stats
+                        ? formatFileSize(
+                          selectedDocument.index_stats.file_size_bytes,
+                        )
+                        : '—'}
+                    </strong>
+                  </div>
+
+                  <div className="document-details-row">
+                    <span>Chunks</span>
+
+                    <strong>
+                      {selectedDocument.index_stats
+                        ? selectedDocument.index_stats.chunk_count.toLocaleString()
+                        : '—'}
+                    </strong>
+                  </div>
+
+                  <div className="document-details-row">
+                    <span>Entities</span>
+
+                    <strong>
+                      {selectedDocument.index_stats
+                        ? selectedDocument.index_stats.entity_count.toLocaleString()
+                        : '—'}
+                    </strong>
+                  </div>
+
+                  <div className="document-details-row">
+                    <span>Relationships</span>
+
+                    <strong>
+                      {selectedDocument.index_stats
+                        ? selectedDocument.index_stats.relationship_count.toLocaleString()
+                        : '—'}
+                    </strong>
+                  </div>
+
+                  <div className="document-details-row">
+                    <span>Retrieval</span>
+
+                    <strong>
+                      {selectedDocument.index_stats?.retrieval_method ?? '—'}
+                    </strong>
+                  </div>
+                </div>
                 {/* <div className="document-details-section">
                   <span className="document-details-section-title">
                     IDENTIFIERS
