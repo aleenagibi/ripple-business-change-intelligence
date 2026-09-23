@@ -11,6 +11,7 @@ from app.services.chunk_service import ChunkService
 from app.services.document_extraction_service import (
     DocumentExtractionService,
 )
+from app.services.relationship_service import RelationshipService
 from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
@@ -31,12 +32,13 @@ class DocumentService:
 
     def __init__(self, db: Session) -> None:
         self.db = db
-
+        self.relationship_service = RelationshipService(db)
         self.document_repository = DocumentRepository(db)
         self.organization_repository = OrganizationRepository(db)
 
         self.extraction_service = DocumentExtractionService()
         self.chunk_service = ChunkService(db)
+        
 
     async def upload(
         self,
@@ -138,7 +140,9 @@ class DocumentService:
             self.chunk_service.process_document(
                 document
             )
-
+            self.relationship_service.process_organization(
+                organization_id
+            )
             document.processing_status = "completed"
 
             self.db.commit()

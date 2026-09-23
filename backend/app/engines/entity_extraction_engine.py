@@ -430,18 +430,30 @@ class EntityExtractionEngine:
 
                 left_steps = 0
 
-                while start > 0 and left_steps < 4:
-                    previous = sentence_tokens[
-                        start - 1
-                    ]
+                while start > 0 and left_steps < 6:
+                    previous = sentence_tokens[start - 1]
 
-                    if not self._can_extend_left(
-                        previous
+                    if self._can_extend_left(previous):
+                        start -= 1
+                        left_steps += 1
+                        continue
+
+                    # Preserve numeric hyphenated modifiers such as
+                    # "15-minute" when the structural phrase begins
+                    # at "minute".
+                    if (
+                        previous.is_punct
+                        and previous.text == "-"
+                        and start >= 2
                     ):
-                        break
+                        number = sentence_tokens[start - 2]
 
-                    start -= 1
-                    left_steps += 1
+                        if number.like_num:
+                            start -= 2
+                            left_steps += 2
+                            continue
+
+                    break
 
                 # ------------------------------------------------------
                 # Extend to the right only when the following words
@@ -854,6 +866,37 @@ class EntityExtractionEngine:
     # ==================================================================
 
     @staticmethod
+    def _is_hyphenated_numeric_modifier(
+        tokens: list[Token],
+        index: int,
+    ) -> bool:
+        """
+        Return True when the token at `index` participates in a numeric
+        hyphenated modifier such as:
+
+            15-minute
+            30-day
+            4-hour
+
+        This allows structural phrases to preserve the complete modifier
+        instead of producing fragments such as "minute freshness standard".
+        """
+        if index < 2:
+            return False
+
+        current = tokens[index]
+        separator = tokens[index - 1]
+        number = tokens[index - 2]
+
+        if current.pos_ not in {"NOUN", "PROPN", "ADJ"}:
+            return False
+
+        if not separator.is_punct or separator.text != "-":
+            return False
+
+        return number.like_num
+
+    @staticmethod
     def _can_extend_left(
         token: Token,
     ) -> bool:
@@ -887,12 +930,41 @@ class EntityExtractionEngine:
     def _can_extend_right(
         token: Token,
     ) -> bool:
+        """
+        Allow right-side extension only when the token is grammatically
+        part of the nominal phrase.
+
+        A bare NOUN/PROPN is not sufficient because sentence structures
+        such as:
+
+            "the freshness standard RateEngine must meet"
+
+        can otherwise produce the invalid entity:
+
+            "freshness standard RateEngine"
+
+        Dependency-aware extension preserves legitimate compounds while
+        preventing subjects, objects, and following clauses from leaking
+        into the entity span.
+        """
         if token.is_punct:
             return False
 
-        return token.pos_ in {
+        if token.pos_ not in {
             "NOUN",
             "PROPN",
+            "ADJ",
+            "NUM",
+        }:
+            return False
+
+        return token.dep_ in {
+            "compound",
+            "amod",
+            "nmod",
+            "flat",
+            "fixed",
+            "appos",
         }
 
     # ==================================================================
@@ -1156,6 +1228,9 @@ class EntityExtractionEngine:
             return structural_type
 
         if spacy_label == "ORG":
+            if cls._looks_like_technology(normalized):
+                return "SYSTEM"
+
             return "ORGANIZATION"
 
         if spacy_label in {
@@ -1333,6 +1408,11 @@ class EntityExtractionEngine:
                     "-platform",
                     "-engine",
                 )
+            )
+            or re.search(
+                r"(?:Engine|Platform|Service|System)$",
+                token,
+                re.IGNORECASE,
             )
             for token in tokens
         )

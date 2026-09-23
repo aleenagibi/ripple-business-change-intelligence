@@ -1,6 +1,7 @@
+from uuid import UUID
+
 from app.db.database import SessionLocal
 from app.services.relationship_service import RelationshipService
-from uuid import UUID
 
 ORGANIZATION_ID = UUID("90ddbf29-85e7-4322-8aed-b0ce88897cb1")
 

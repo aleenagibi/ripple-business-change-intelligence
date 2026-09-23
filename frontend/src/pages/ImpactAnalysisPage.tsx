@@ -18,6 +18,11 @@ interface Organization {
   slug: string
 }
 
+interface ImpactSourceDocument {
+  document_id: string
+  filename: string
+}
+
 interface ImpactResult {
   entity_id: string
   name: string
@@ -31,6 +36,7 @@ interface ImpactResult {
   propagation_distance: number
   path: string[]
   explanation: string
+  source_documents: ImpactSourceDocument[]
 }
 
 interface ImpactAnalysisPageProps {
@@ -390,15 +396,15 @@ function buildCascadeGraph(
       index >= 0;
       index -= 1
     ) {
+      const pathItem = path[index]
+
       const candidate =
-        resultsByName.get(
-          path[index].toLowerCase(),
-        )
+        resultsById.get(pathItem) ??
+        resultsByName.get(pathItem.toLowerCase())
 
       if (
         candidate &&
-        candidate.entity_id !==
-        result.entity_id
+        candidate.entity_id !== result.entity_id
       ) {
         parent = candidate
         break
@@ -465,7 +471,7 @@ function buildCascadeGraph(
    * maps are intentionally created for the
    * relationship-building phase.
    */
-  void resultsById
+
 
   return {
     nodes,
@@ -1043,8 +1049,8 @@ function ImpactAnalysisPage({
                           <button
                             type="button"
                             className={`impact-result impact-result-selectable${selected
-                                ? ' selected'
-                                : ''
+                              ? ' selected'
+                              : ''
                               }`}
                             key={
                               result.entity_id
@@ -1318,24 +1324,36 @@ function ImpactAnalysisPage({
 
                       <div className="impact-detail-path">
                         {selectedResult.path.length > 0 ? (
-                          selectedResult.path.map(
-                            (item, index) => (
+                          selectedResult.path.map((item, index) => {
+                            const pathEntity =
+                              results.find(
+                                (result) =>
+                                  result.entity_id === item,
+                              ) ??
+                              results.find(
+                                (result) =>
+                                  result.name.trim().toLowerCase() ===
+                                  item.trim().toLowerCase(),
+                              )
+
+                            return (
                               <div
                                 className="impact-detail-path-item"
                                 key={`${item}-${index}`}
                               >
                                 <span>{index + 1}</span>
 
-                                <strong>{item}</strong>
+                                <strong>
+                                  {pathEntity?.name ?? item}
+                                </strong>
 
                                 {index <
-                                  selectedResult.path.length -
-                                  1 && (
+                                  selectedResult.path.length - 1 && (
                                     <i>↓</i>
                                   )}
                               </div>
-                            ),
-                          )
+                            )
+                          })
                         ) : (
                           <span>
                             Direct semantic evidence
@@ -1348,7 +1366,41 @@ function ImpactAnalysisPage({
                       <span className="impact-detail-section-title">
                         Why Ripple identified this
                       </span>
+                      {selectedResult.source_documents.length > 0 && (
+                        <section className="impact-detail-section">
+                          <div className="impact-detail-section-header">
+                            <span className="impact-detail-section-label">
+                              SOURCE DOCUMENTS
+                            </span>
+                            <span className="impact-detail-section-count">
+                              {selectedResult.source_documents.length}
+                            </span>
+                          </div>
 
+                          <div className="impact-source-documents">
+                            {selectedResult.source_documents.map((document) => (
+                              <div
+                                key={document.document_id}
+                                className="impact-source-document"
+                              >
+                                <div className="impact-source-document-icon">
+                                  DOC
+                                </div>
+
+                                <div className="impact-source-document-content">
+                                  <span className="impact-source-document-name">
+                                    {document.filename}
+                                  </span>
+
+                                  <span className="impact-source-document-meta">
+                                    Evidence source
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </section>
+                      )}
                       <p className="impact-detail-explanation">
                         {selectedResult.explanation}
                       </p>

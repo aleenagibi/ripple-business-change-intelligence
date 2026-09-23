@@ -144,6 +144,39 @@ class EntityRepository:
         )
 
 
+    def list_source_documents_for_canonical_entity(
+        self,
+        canonical_entity_id: UUID,
+    ) -> list[tuple[UUID, str]]:
+        """Return unique source documents containing a canonical entity."""
+
+        statement = (
+            select(
+                Document.id,
+                Document.filename,
+            )
+            .join(
+                DocumentChunk,
+                DocumentChunk.document_id == Document.id,
+            )
+            .join(
+                BusinessEntity,
+                BusinessEntity.chunk_id == DocumentChunk.id,
+            )
+            .where(
+                BusinessEntity.canonical_entity_id
+                == canonical_entity_id
+            )
+            .distinct()
+            .order_by(
+                Document.filename,
+            )
+        )
+
+        return list(
+            self.db.execute(statement).all()
+        )
+
     def count_mentions_for_canonical_entity(
         self,
         canonical_entity_id: UUID,

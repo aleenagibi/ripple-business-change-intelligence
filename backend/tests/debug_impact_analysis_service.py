@@ -8,7 +8,9 @@ ORGANIZATION_ID = UUID(
     "b5154ce1-c734-489e-a769-880535ceebcd"
 )
 
-QUERY = "Payment processing changes"
+QUERY = (
+    "Change the RATE-409 held quote resolution window from 4 business hours to 1 business hour."
+)
 
 
 def main() -> None:
@@ -40,9 +42,23 @@ def main() -> None:
         print(f"RESULTS: {len(hybrid_results)}")
 
         for result in hybrid_results:
+            tfidf_score = (
+                f"{result.tfidf_score:.6f}"
+                if result.tfidf_score is not None
+                else "None"
+            )
+
+            dense_score = (
+                f"{result.dense_score:.6f}"
+                if result.dense_score is not None
+                else "None"
+            )
+
             print(
                 f"  chunk={result.chunk_id}"
-                f" | score={result.score:.6f}"
+                f" | rrf={result.score:.6f}"
+                f" | tfidf={tfidf_score}"
+                f" | dense={dense_score}"
                 f" | tfidf_rank={result.tfidf_rank}"
                 f" | dense_rank={result.dense_rank}"
             )

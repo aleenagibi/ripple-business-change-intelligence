@@ -46,6 +46,28 @@ class ImpactAnalysisEngine:
     # Propagated impact is deliberately weaker.
     PROPAGATED_SEMANTIC_WEIGHT = 0.60
     PROPAGATED_RELATIONSHIP_WEIGHT = 0.25
+    # Propagated results must retain enough evidence to be
+    # considered a meaningful business impact.
+    # Propagated results become progressively stricter as graph
+    # distance increases. This prevents weak relationships from
+    # producing misleading multi-hop impacts.
+    MIN_PROPAGATED_IMPACT_SCORE = 0.18
+
+    PROPAGATION_THRESHOLDS = {
+        1: {
+            "semantic": 0.12,
+            "relationship": 0.60,
+        },
+        2: {
+            "semantic": 0.20,
+            "relationship": 0.70,
+        },
+        3: {
+            "semantic": 0.24,
+            "relationship": 0.82,
+        },
+    }
+
     PROPAGATED_PROXIMITY_WEIGHT = 0.15
 
     RELATIONSHIP_STRENGTH = {
@@ -278,6 +300,40 @@ class ImpactAnalysisEngine:
                         * entity_importance_score
                     )
                 )
+                                # -----------------------------------------------------
+                # Reject weak propagated impacts.
+                #
+                # Distance alone must never make an entity appear
+                # affected. The propagated result must retain:
+                #   1. meaningful semantic relevance
+                #   2. a sufficiently strong relationship path
+                #   3. a minimum combined impact score
+                # -----------------------------------------------------
+
+                thresholds = self.PROPAGATION_THRESHOLDS.get(
+                    distance
+                )
+
+                if thresholds is None:
+                    continue
+
+                if (
+                    propagated_semantic
+                    < thresholds["semantic"]
+                ):
+                    continue
+
+                if (
+                    relationship_strength
+                    < thresholds["relationship"]
+                ):
+                    continue
+
+                if (
+                    impact_score
+                    < self.MIN_PROPAGATED_IMPACT_SCORE
+                ):
+                    continue
 
                 relationship_label = (
                     self._path_relationship_label(

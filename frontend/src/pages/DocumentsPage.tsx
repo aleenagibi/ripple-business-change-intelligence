@@ -920,7 +920,7 @@ function DocumentsPage({
                   </div>
                 </div>
 
-                <div className="document-details-section">
+                {/* <div className="document-details-section">
                   <span className="document-details-section-title">
                     IDENTIFIERS
                   </span>
@@ -940,7 +940,7 @@ function DocumentsPage({
                       {selectedDocument.organization_id}
                     </code>
                   </div>
-                </div>
+                </div> */}
               </>
             )}
           </aside>
