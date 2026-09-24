@@ -3,7 +3,10 @@ from uuid import UUID
 from app.api.auth_dependencies import require_organization_access
 from app.db.database import get_db
 from app.models.user import User
-from app.schemas.document import DocumentResponse
+from app.schemas.document import (
+    DocumentDetailResponse,
+    DocumentResponse,
+)
 from app.services.document_service import DocumentService
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
@@ -73,17 +76,17 @@ def list_documents(
 
 @router.get(
     "/{document_id}",
-    response_model=DocumentResponse,
+    response_model=DocumentDetailResponse,
 )
 def get_document(
     organization_id: UUID,
     document_id: UUID,
     _: User = Depends(require_organization_access),
     db: Session = Depends(get_db),
-) -> DocumentResponse:
+) -> DocumentDetailResponse:
     service = DocumentService(db)
 
-    document = service.document_repository.get_by_id(
+    document, stats = service.get_document_details(
         document_id=document_id,
         organization_id=organization_id,
     )
@@ -94,4 +97,22 @@ def get_document(
             detail="Document not found.",
         )
 
-    return DocumentResponse.model_validate(document)
+    metadata = document.document_metadata or {}
+    file_size_bytes = metadata.get("size_bytes", 0)
+
+    if not isinstance(file_size_bytes, int):
+        try:
+            file_size_bytes = int(file_size_bytes)
+        except (TypeError, ValueError):
+            file_size_bytes = 0
+
+    return DocumentDetailResponse(
+        **DocumentResponse.model_validate(document).model_dump(),
+        index_stats={
+            "file_size_bytes": max(file_size_bytes, 0),
+            "chunk_count": stats["chunk_count"],
+            "entity_count": stats["entity_count"],
+            "relationship_count": stats["relationship_count"],
+            "retrieval_method": "Hybrid -+ TF-IDF + Dense",
+        },
+    )

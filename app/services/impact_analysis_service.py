@@ -1,15 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 from uuid import UUID
 
 import networkx as nx
 import numpy as np
-from sentence_transformers import SentenceTransformer
-from sqlalchemy.orm import Session
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-
 from app.engines.change_understanding_engine import (
     ChangeSpecification,
     ChangeUnderstandingEngine,
@@ -23,8 +19,18 @@ from app.models.entity import BusinessEntity
 from app.repositories.entity_repository import EntityRepository
 from app.services.knowledge_graph_service import KnowledgeGraphService
 from app.services.retrieval_service import RetrievalService
+from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from sqlalchemy.orm import Session
 
 
+@dataclass(frozen=True)
+class ImpactSourceDocument:
+    """Source document containing evidence for an impacted entity."""
+
+    document_id: UUID
+    filename: str
 class ImpactAnalysisService:
     """
     Orchestrates Ripple's complete business change impact pipeline.
@@ -50,13 +56,14 @@ class ImpactAnalysisService:
 
     # Kept as explicit configuration constants so the scoring model
     # remains easy to tune and explain.
-    ENTITY_SIMILARITY_WEIGHT = 0.70
-    CHUNK_RELEVANCE_WEIGHT = 0.30
+    DIRECT_RETRIEVAL_WEIGHT = 0.40
+    DIRECT_ENTITY_WEIGHT = 0.60
 
     ENTITY_DENSE_WEIGHT = 0.75
     ENTITY_LEXICAL_WEIGHT = 0.25
 
-    ENTITY_IMPACT_THRESHOLD = 0.35
+    MIN_ENTITY_SEMANTIC_RELEVANCE = 0.20
+    ENTITY_IMPACT_THRESHOLD = 0.50
 
     EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 
@@ -198,6 +205,27 @@ class ImpactAnalysisService:
             )
         )
 
+        print("[IMPACT DEBUG] TOP DIRECT SEEDS")
+        for entity_id, score in sorted(
+            semantic_scores.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:30]:
+            entity = graph.nodes.get(entity_id, {})
+            print(
+                f"  {score:.4f} | "
+                f"{entity.get('entity_type')} | "
+                f"{entity.get('name')}"
+            )
+
+        print(
+            f"[IMPACT DEBUG] "
+            f"hybrid_results={len(hybrid_results)} "
+            f"direct_seed_entities={len(semantic_scores)} "
+            f"graph_nodes={graph.number_of_nodes()} "
+            f"graph_edges={graph.number_of_edges()}"
+        )
+
         if not semantic_scores:
             return []
 
@@ -233,144 +261,186 @@ class ImpactAnalysisService:
 
     def _build_entity_semantic_scores(
         self,
+        *,
         query: str,
         hybrid_results,
-        graph: nx.MultiDiGraph,
+        graph: nx.Graph,
     ) -> dict[UUID, float]:
         """
-        Build evidence-backed direct semantic scores for canonical
-        entities found in retrieved document chunks.
+        Build semantic relevance scores for canonical entities using
+        absolute retrieval evidence followed by entity-level semantic
+        refinement.
 
-        Evidence is intentionally layered:
+        Important design rule:
+            Retrieval establishes whether a query is relevant to the
+            organization's knowledge base.
 
-            1. Hybrid retrieval evidence
-            2. Entity-level dense semantic similarity
-            3. Entity-level lexical similarity
-            4. Exact entity-name match
+            Entity similarity only refines that retrieved evidence.
 
-        Retrieval evidence is the primary signal.
+            Entity similarity must never manufacture relevance for an
+            unrelated query.
 
-        This prevents a generic phrase such as "4 business hours"
-        from outranking source artifacts such as policies, APIs,
-        workflows and teams merely because the artifact name is less
-        similar to the full requirement sentence.
-
-        The method uses only fields exposed by the current HybridResult:
-
-            - score
-            - chunk_id
-            - retrieval rank
-
-        The hybrid RRF score is NOT treated as a cosine similarity.
-        It is used only as relative retrieval evidence.
+        TF-IDF and dense scores are treated as absolute relevance signals.
+        RRF is used only for ranking and is deliberately not normalized
+        against the top result because RRF is a rank-fusion score rather
+        than a semantic similarity score.
         """
 
         if not query.strip() or not hybrid_results:
             return {}
 
         # -------------------------------------------------------------
-        # 1. LOAD ENTITIES BELONGING TO RETRIEVED CHUNKS
+        # 1. RETRIEVED CHUNK EVIDENCE
         # -------------------------------------------------------------
 
-        chunk_ids: set[UUID] = set()
-
-        for result in hybrid_results:
-            chunk_id = self._coerce_uuid(
-                result.chunk_id
-            )
-
-            if chunk_id is not None:
-                chunk_ids.add(chunk_id)
+        chunk_ids = {
+            result.chunk_id
+            for result in hybrid_results
+            if result.chunk_id is not None
+        }
 
         if not chunk_ids:
             return {}
 
-        entities_by_chunk: dict[
-            UUID,
-            list[BusinessEntity],
-        ] = {}
+        entities_by_chunk: dict[UUID, list] = {}
 
         for chunk_id in chunk_ids:
-            entities_by_chunk[chunk_id] = (
-                self.entity_repository.list_for_chunk(
-                    chunk_id
-                )
+            entities = self.entity_repository.list_for_chunk(
+                chunk_id
             )
 
+            if entities:
+                entities_by_chunk[chunk_id] = entities
+
+        if not entities_by_chunk:
+            return {}
+
         # -------------------------------------------------------------
-        # 2. COLLECT CANONICAL ENTITY RETRIEVAL EVIDENCE
+        # 2. ABSOLUTE RETRIEVAL RELEVANCE GATE
+        # -------------------------------------------------------------
+        #
+        # RRF is intentionally NOT used as the relevance threshold.
+        #
+        # RRF answers:
+        #     "How highly did this chunk rank?"
+        #
+        # It does NOT answer:
+        #     "Is this query actually relevant to this chunk?"
+        #
+        # The raw TF-IDF and dense scores provide the latter signal.
+        #
+        # Thresholds are deliberately conservative:
+        #
+        #   dense >= 0.20
+        #       OR
+        #   TF-IDF >= 0.08
+        #
+        # A chunk must pass at least one absolute relevance test before
+        # its entities can participate in impact analysis.
         # -------------------------------------------------------------
 
-        canonical_entities: dict[
-            UUID,
-            BusinessEntity,
-        ] = {}
+        MIN_DENSE_CHUNK_RELEVANCE = 0.20
+        MIN_TFIDF_CHUNK_RELEVANCE = 0.08
 
-        entity_evidence: dict[
-            UUID,
-            float,
-        ] = {}
+        relevant_chunks: list[tuple[object, float]] = []
 
-        entity_occurrences: dict[
-            UUID,
-            int,
-        ] = {}
-
-        top_rrf_score = max(
-            float(
-                getattr(
-                    hybrid_results[0],
-                    "score",
-                    0.0,
-                )
-                or 0.0
-            ),
-            1e-8,
-        )
-
-        for rank, result in enumerate(
-            hybrid_results,
-            start=1,
-        ):
-            chunk_id = self._coerce_uuid(
-                result.chunk_id
+        for result in hybrid_results:
+            dense_score = (
+                float(result.dense_score)
+                if result.dense_score is not None
+                else 0.0
             )
 
-            if chunk_id is None:
+            tfidf_score = (
+                float(result.tfidf_score)
+                if result.tfidf_score is not None
+                else 0.0
+            )
+
+            # Dense cosine similarity can be negative.
+            dense_relevance = max(
+                0.0,
+                min(1.0, dense_score),
+            )
+
+            # TF-IDF cosine similarity is also bounded to [0, 1],
+            # but protect against unexpected numerical values.
+            tfidf_relevance = max(
+                0.0,
+                min(1.0, tfidf_score),
+            )
+
+            passes_dense_gate = (
+                dense_relevance
+                >= MIN_DENSE_CHUNK_RELEVANCE
+            )
+
+            passes_tfidf_gate = (
+                tfidf_relevance
+                >= MIN_TFIDF_CHUNK_RELEVANCE
+            )
+
+            if not (
+                passes_dense_gate
+                or passes_tfidf_gate
+            ):
                 continue
 
-            rrf_score = max(
-                float(
-                    getattr(
-                        result,
-                        "score",
-                        0.0,
-                    )
-                    or 0.0
-                ),
-                0.0,
+            # TF-IDF and dense retrieval are different signals.
+            # We use the stronger absolute signal as the chunk's
+            # relevance evidence rather than treating their raw scales
+            # as identical.
+            chunk_relevance = max(
+                dense_relevance,
+                tfidf_relevance,
             )
 
-            # ---------------------------------------------------------
-            # RRF IS A FUSION SCORE, NOT A COSINE SIMILARITY
-            # ---------------------------------------------------------
-            #
-            # Normalize relative to the strongest retrieved result.
-            # This gives us a stable retrieval-evidence signal without
-            # pretending that RRF has the same meaning as dense cosine
-            # similarity.
-            #
-            normalized_rrf = min(
-                rrf_score / top_rrf_score,
-                1.0,
+            relevant_chunks.append(
+                (
+                    result,
+                    chunk_relevance,
+                )
             )
 
-            # Rank decay gives higher-ranked chunks stronger evidence.
+        # -------------------------------------------------------------
+        # 3. QUERY-LEVEL RELEVANCE GATE
+        # -------------------------------------------------------------
+        #
+        # If no retrieved chunk is sufficiently relevant, the query has
+        # no reliable evidence in the organization's corpus.
+        #
+        # Return no entity scores instead of allowing the graph to
+        # generate false-positive impact.
+        # -------------------------------------------------------------
+
+        if not relevant_chunks:
+            return {}
+
+        # -------------------------------------------------------------
+        # 4. MAP RETRIEVED EVIDENCE TO CANONICAL ENTITIES
+        # -------------------------------------------------------------
+
+        canonical_entities: dict[UUID, object] = {}
+        entity_evidence: dict[UUID, float] = {}
+        entity_occurrences: dict[UUID, int] = {}
+
+        for rank, (
+            result,
+            chunk_relevance,
+        ) in enumerate(
+            relevant_chunks,
+            start=1,
+        ):
+            chunk_id = result.chunk_id
+
+            # Rank is only a secondary confidence factor.
+            # It cannot make an irrelevant chunk relevant because the
+            # absolute relevance gate above has already been applied.
             rank_factor = 1.0 / np.sqrt(rank)
 
             chunk_evidence = (
-                0.70 * normalized_rrf
-                + 0.30 * rank_factor
+                0.80 * chunk_relevance
+                + 0.20 * rank_factor
             )
 
             for entity in entities_by_chunk.get(
@@ -403,9 +473,8 @@ class ImpactAnalysisService:
                 if previous == 0.0:
                     updated_evidence = chunk_evidence
                 else:
-                    # Repeated evidence from additional retrieved
-                    # chunks strengthens confidence with diminishing
-                    # returns.
+                    # Repeated evidence strengthens confidence with
+                    # diminishing returns.
                     updated_evidence = min(
                         1.0,
                         previous
@@ -433,7 +502,7 @@ class ImpactAnalysisService:
             return {}
 
         # -------------------------------------------------------------
-        # 3. BUILD ENTITY CONTEXTS
+        # 5. BUILD ENTITY CONTEXTS
         # -------------------------------------------------------------
 
         entity_ids = list(
@@ -461,7 +530,7 @@ class ImpactAnalysisService:
             )
 
         # -------------------------------------------------------------
-        # 4. DENSE SEMANTIC SIMILARITY
+        # 6. DENSE ENTITY SEMANTIC SIMILARITY
         # -------------------------------------------------------------
 
         embeddings = (
@@ -492,7 +561,7 @@ class ImpactAnalysisService:
         )
 
         # -------------------------------------------------------------
-        # 5. LEXICAL SIMILARITY
+        # 7. LEXICAL ENTITY SIMILARITY
         # -------------------------------------------------------------
 
         vectorizer = TfidfVectorizer(
@@ -520,7 +589,7 @@ class ImpactAnalysisService:
         )
 
         # -------------------------------------------------------------
-        # 6. EXACT ENTITY / IDENTIFIER EVIDENCE
+        # 8. ENTITY-LEVEL SCORE
         # -------------------------------------------------------------
 
         query_lower = query.lower()
@@ -552,32 +621,20 @@ class ImpactAnalysisService:
                 * lexical_similarity
             )
 
-            entity_similarity = min(
-                max(
+            entity_similarity = float(
+                np.clip(
                     entity_similarity,
                     0.0,
-                ),
-                1.0,
-            )
-
-            retrieval_evidence = min(
-                max(
-                    entity_evidence.get(
-                        entity_id,
-                        0.0,
-                    ),
-                    0.0,
-                ),
-                1.0,
+                    1.0,
+                )
             )
 
             entity_name = (
                 entity.name.strip().lower()
+                if entity.name
+                else ""
             )
 
-            # Exact identifiers such as RATE-409, RDP-002 and
-            # API-RE-007 receive an explicit lexical anchor when the
-            # requirement directly names them.
             exact_match = (
                 1.0
                 if entity_name
@@ -585,62 +642,87 @@ class ImpactAnalysisService:
                 else 0.0
             )
 
-            # Repeated mentions across multiple retrieved chunks
-            # provide additional corpus evidence.
             occurrence_bonus = min(
                 0.10,
                 0.03
                 * max(
+                    0,
                     entity_occurrences.get(
                         entity_id,
                         1,
                     )
                     - 1,
-                    0,
                 ),
             )
 
-            # ---------------------------------------------------------
-            # FINAL DIRECT EVIDENCE SCORE
-            # ---------------------------------------------------------
-            #
-            # Retrieval evidence is intentionally the strongest signal.
-            #
-            # This is critical for Ripple:
-            #
-            #     requirement
-            #          ↓
-            #     relevant document
-            #          ↓
-            #     entity mentioned in document
-            #          ↓
-            #     canonical entity
-            #
-            # should be stronger evidence than simply having an entity
-            # name that happens to resemble the requirement text.
-            #
-            combined_score = (
-                0.55 * retrieval_evidence
-                + 0.30 * entity_similarity
-                + 0.10 * exact_match
-                + occurrence_bonus
+            retrieval_evidence = entity_evidence.get(
+                entity_id,
+                0.0,
             )
 
-            combined_score = min(
-                max(
+            # ---------------------------------------------------------
+            # IMPORTANT:
+            #
+            # Entity similarity is multiplied by retrieval evidence.
+            #
+            # Therefore:
+            #
+            #     retrieval evidence = 0
+            #         -> entity score = 0
+            #
+            # A semantically similar entity cannot become an impact
+            # candidate unless the query first retrieved relevant
+            # document evidence.
+            # ---------------------------------------------------------
+
+            combined_score = (
+                self.DIRECT_RETRIEVAL_WEIGHT
+                * retrieval_evidence
+                + self.DIRECT_ENTITY_WEIGHT
+                * entity_similarity
+            )
+
+            # Exact identifier/name matches are useful evidence, but
+            # they are deliberately bounded so that they cannot bypass
+            # the retrieval gate.
+            if exact_match > 0.0:
+                combined_score += (
+                    0.05
+                    * retrieval_evidence
+                )
+
+            combined_score += (
+                occurrence_bonus
+                * retrieval_evidence
+            )
+
+            combined_score = float(
+                np.clip(
                     combined_score,
                     0.0,
-                ),
-                1.0,
+                    1.0,
+                )
             )
-
-            # An entity must have meaningful evidence from the
-            # retrieved organization corpus. Semantic similarity alone
-            # cannot introduce a new direct impact seed.
+            if combined_score >= 0.70:
+                print(
+                    "[IMPACT DEBUG] "
+                    f"{entity.name} | "
+                    f"retrieval={retrieval_evidence:.4f} | "
+                    f"entity_similarity={entity_similarity:.4f} | "
+                    f"combined={combined_score:.4f}"
+    )
+            # Final entity-level minimum.
+            #
+            # This removes very weak candidates that survived the
+            # chunk-level gate while preserving genuinely supported
+            # entities.
             if retrieval_evidence < 0.15:
                 continue
 
-            if combined_score < 0.25:
+            if entity_similarity < self.MIN_ENTITY_SEMANTIC_RELEVANCE:
+                continue
+
+            if combined_score < self.ENTITY_IMPACT_THRESHOLD:
                 continue
 
             semantic_scores[
@@ -648,7 +730,6 @@ class ImpactAnalysisService:
             ] = combined_score
 
         return semantic_scores
-
     @staticmethod
     def _coerce_uuid(
         value,

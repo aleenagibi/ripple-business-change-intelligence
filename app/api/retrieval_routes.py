@@ -3,6 +3,7 @@ from uuid import UUID
 from app.api.auth_dependencies import require_organization_access
 from app.db.database import get_db
 from app.models.user import User
+from app.repositories.entity_repository import EntityRepository
 from app.schemas.retrieval import (
     HybridRetrievalResult,
     ImpactAnalysisRequest,
@@ -131,6 +132,7 @@ def impact_analysis(
     """
 
     service = ImpactAnalysisService(db)
+    entity_repository = EntityRepository(db)
 
     results = service.analyze(
         organization_id=organization_id,
@@ -155,6 +157,18 @@ def impact_analysis(
             propagation_distance=result.propagation_distance,
             path=[str(entity_id) for entity_id in result.path],
             explanation=result.explanation,
+            source_documents=[
+                {
+                    "document_id": str(document_id),
+                    "filename": filename,
+                }
+                for document_id, filename in (
+                    entity_repository
+                    .list_source_documents_for_canonical_entity(
+                        result.entity_id
+                    )
+                )
+            ],
         )
         for result in results
     ]

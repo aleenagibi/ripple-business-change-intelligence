@@ -58,7 +58,11 @@ class ImpactAnalysisRequest(BaseModel):
         le=10,
     )
 
+class ImpactSourceDocument(BaseModel):
+    """A document containing evidence for an impacted business entity."""
 
+    document_id: str
+    filename: str
 class ImpactAnalysisResult(BaseModel):
     """A business entity identified as potentially impacted."""
 
@@ -80,3 +84,5 @@ class ImpactAnalysisResult(BaseModel):
 
     path: list[str]
     explanation: str
+
+    source_documents: list[ImpactSourceDocument]
