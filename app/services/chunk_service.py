@@ -102,8 +102,10 @@ class ChunkService:
 
         self.db.flush()
 
+        entity_service = EntityService(self.db)
+
         for chunk in chunks:
-            self.entity_service.process_chunk(
+            entity_service.process_chunk(
                 chunk
             )
 
