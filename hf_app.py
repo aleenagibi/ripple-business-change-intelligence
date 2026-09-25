@@ -19,6 +19,7 @@ from app.api.retrieval_routes import router as retrieval_router
 from app.core.config import settings
 from app.db.database import get_db
 from app.models.user import User
+from app.repositories.entity_repository import EntityRepository
 from app.schemas.document import DocumentResponse
 from app.schemas.retrieval import (
     ImpactAnalysisRequest,
@@ -26,7 +27,6 @@ from app.schemas.retrieval import (
 )
 from app.services.document_service import DocumentService
 from app.services.impact_analysis_service import ImpactAnalysisService
-
 
 server = Server(
     title=settings.APP_NAME,
@@ -82,6 +82,7 @@ def _run_impact_analysis_on_gpu(
         )
     finally:
         database_generator.close()
+
 
 
 @spaces.GPU(duration=120)
@@ -277,7 +278,6 @@ def impact_analysis(
     _: User = Depends(require_organization_access),
     db: Session = Depends(get_db),
 ) -> list[ImpactAnalysisResult]:
-    del db
 
     results = _run_impact_analysis_on_gpu(
         organization_id=str(organization_id),
@@ -285,6 +285,8 @@ def impact_analysis(
         top_k=request.top_k,
         max_distance=request.max_distance,
     )
+
+    entity_repository = EntityRepository(db)
 
     return [
         ImpactAnalysisResult(
@@ -305,12 +307,16 @@ def impact_analysis(
                 for entity_id in result.path
             ],
             explanation=result.explanation,
-             source_documents=[
+            source_documents=[
                 {
-                    "document_id": str(document.document_id),
-                    "filename": document.filename,
+                    "document_id": str(document_id),
+                    "filename": filename,
                 }
-                for document in result.source_documents
+                for document_id, filename in (
+                    entity_repository.list_source_documents_for_canonical_entity(
+                        result.entity_id
+                    )
+                )
             ],
         )
         for result in results
