@@ -36,7 +36,7 @@ class EntityService:
 
         Resolution strategy:
 
-            1. Exact normalized-name match.
+            1. Exact normalized-name match using an in-memory lookup.
             2. Semantic match against existing canonical entities
                of the same entity type.
             3. Create a new canonical entity when no safe match exists.
@@ -51,9 +51,6 @@ class EntityService:
 
         self.repository.delete_for_chunk(chunk.id)
 
-        # Execute the DELETE before inserting newly extracted
-        # entities. This prevents unique-constraint conflicts when
-        # the same chunk is processed more than once.
         self.db.flush()
 
         # ---------------------------------------------------------
@@ -69,11 +66,7 @@ class EntityService:
         entities: list[BusinessEntity] = []
 
         # ---------------------------------------------------------
-        # 3. Load canonical candidates when they were not supplied.
-        #
-        # This keeps process_chunk() independently usable while
-        # allowing process_organization() to reuse one candidate
-        # collection for the entire organization.
+        # 3. Load canonical candidates once when not supplied.
         # ---------------------------------------------------------
 
         if canonical_entities is None:
@@ -84,15 +77,27 @@ class EntityService:
             )
 
         # ---------------------------------------------------------
-        # 4. Deduplicate entities within this chunk.
+        # 4. Build an in-memory exact-match lookup.
         #
-        # The database constraint is:
+        # Key:
+        #     (normalized_name, entity_type)
         #
-        # (chunk_id, normalized_name, entity_type)
-        #
-        # so the same logical key is used here.
+        # This avoids a database query for every extracted entity.
         # ---------------------------------------------------------
 
+        canonical_lookup: dict[
+            tuple[str, str],
+            CanonicalEntity,
+        ] = {
+            (
+                canonical.normalized_name.strip().lower(),
+                canonical.entity_type.strip().upper(),
+            ): canonical
+            for canonical in canonical_entities
+        }
+        # ---------------------------------------------------------
+        # 5. Deduplicate entities within this chunk.
+        # ---------------------------------------------------------
         seen_entities: set[tuple[str, str]] = set()
 
         for entity in extracted:
@@ -105,7 +110,6 @@ class EntityService:
                 entity.entity_type.strip().upper()
             )
 
-            # Ignore malformed extraction results.
             if not normalized_name or not entity_type:
                 continue
 
@@ -120,19 +124,15 @@ class EntityService:
             seen_entities.add(entity_key)
 
             # -----------------------------------------------------
-            # 5. Resolve organization-level canonical entity.
+            # 6. Exact canonical lookup in memory.
             # -----------------------------------------------------
 
-            canonical_entity = (
-                self.repository.get_canonical_entity(
-                    organization_id=organization_id,
-                    normalized_name=normalized_name,
-                    entity_type=entity_type,
-                )
+            canonical_entity = canonical_lookup.get(
+                entity_key
             )
 
             # -----------------------------------------------------
-            # 6. If exact matching fails, perform semantic
+            # 7. If exact matching fails, perform semantic
             #    canonical resolution.
             # -----------------------------------------------------
 
@@ -158,7 +158,7 @@ class EntityService:
                     )
 
             # -----------------------------------------------------
-            # 7. Create a new canonical entity when no safe
+            # 8. Create a new canonical entity when no safe
             #    existing match is found.
             # -----------------------------------------------------
 
@@ -176,15 +176,18 @@ class EntityService:
                     canonical_entity
                 )
 
-                # Keep the in-memory candidate collection current
-                # so later entities in the same organization can
-                # resolve against this newly created entity.
                 canonical_entities.append(
                     canonical_entity
                 )
 
+                # Make the new entity immediately available for
+                # exact matching later in this processing run.
+                canonical_lookup[entity_key] = (
+                    canonical_entity
+                )
+
             # -----------------------------------------------------
-            # 8. Enrich an existing canonical entity if necessary.
+            # 9. Enrich an existing canonical entity if necessary.
             # -----------------------------------------------------
 
             elif (
@@ -196,7 +199,7 @@ class EntityService:
                 )
 
             # -----------------------------------------------------
-            # 9. Create chunk-level business entity occurrence.
+            # 10. Create chunk-level business entity occurrence.
             # -----------------------------------------------------
 
             business_entity = BusinessEntity(
@@ -213,7 +216,7 @@ class EntityService:
             )
 
         # ---------------------------------------------------------
-        # 10. Persist all entity occurrences.
+        # 11. Persist all entity occurrences.
         # ---------------------------------------------------------
 
         self.repository.add_many(
