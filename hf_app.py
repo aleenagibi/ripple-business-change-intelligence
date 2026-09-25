@@ -305,6 +305,13 @@ def impact_analysis(
                 for entity_id in result.path
             ],
             explanation=result.explanation,
+             source_documents=[
+                {
+                    "document_id": str(document.document_id),
+                    "filename": document.filename,
+                }
+                for document in result.source_documents
+            ],
         )
         for result in results
     ]
