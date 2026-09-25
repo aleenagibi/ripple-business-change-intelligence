@@ -95,6 +95,7 @@ class EntityRepository:
         entity: CanonicalEntity,
     ) -> CanonicalEntity:
         self.db.add(entity)
+        self.db.flush()
         return entity
 
     def list_chunks_for_organization(
